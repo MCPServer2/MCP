@@ -1,0 +1,48 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Each anonymous visitor owns a unique token; all generations are bound to it.
+// The CometAPI key is NEVER persisted server-side, it only travels per-request.
+model Generation {
+  id            String   @id @default(cuid())
+  userToken     String
+  jobId         String? // link to the async Job that produced this image
+  prompt        String
+  mode          String   // "generate" (text-to-image) | "sketch" (image-to-image)
+  model         String   @default("gpt-image-2.5-flare")
+  size          String   @default("1024x1024")
+  quality       String   @default("auto")
+  outputFormat  String   @default("png")
+  background    String?
+  revisedPrompt String?
+  usedReference Boolean  @default(false) // text-to-image used an uploaded reference image
+  mimeType      String   @default("image/png")
+  data          String // base64 image payload
+  inputTokens   Int?
+  outputTokens  Int?
+  totalTokens   Int?
+  createdAt     DateTime @default(now())
+
+  @@index([userToken, createdAt])
+}
+
+// Async generation job: the API returns the jobId immediately, the model call
+// runs in the background (after), and the client polls the job status.
+model Job {
+  id        String   @id @default(cuid())
+  userToken String
+  status    String   @default("pending") // pending | done | error
+  mode      String // "generate" | "sketch"
+  prompt    String
+  error     String? // Arabic error message when status = error
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userToken, status, createdAt])
+}
