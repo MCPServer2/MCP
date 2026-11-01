@@ -44,6 +44,7 @@ model Job {
   mode      String // "generate" | "sketch" | "video"
   prompt    String
   taskId    String? // upstream provider task id (kie.ai) for video jobs
+  kieKey    String? // kie.ai key used to create the task (user-supplied BYOK; null = server key) — needed so recovery can query the right account
   error     String? // Arabic error message when status = error
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -5,8 +5,12 @@
  * - POST /api/v1/jobs/createTask  → { code, data: { taskId } }
  * - GET  /api/v1/jobs/recordInfo?taskId=… → { code, data: { state, resultJson, failMsg } }
  *
- * The kie.ai key lives in the server environment (KIE_API_KEY); it is never
- * exposed to the browser and never persisted in the database.
+ * Keys: the built-in key lives in the server environment (KIE_API_KEY). Users
+ * may also supply their own kie.ai key (BYOK, like the CometAPI image flow) —
+ * it arrives via the x-kie-key header / MCP kie_key argument and is used for
+ * their video generations instead. The server env key is never exposed to the
+ * browser; a user-supplied key is only stored on the Job row (kieKey) so the
+ * recovery path can query the correct kie.ai account after a worker restart.
  */
 
 export const KIE_BASE = "https://api.kie.ai";
@@ -27,15 +31,61 @@ export class KieError extends Error {
   }
 }
 
-function kieKey(): string {
-  const key = process.env.KIE_API_KEY?.trim();
-  if (!key) {
+/**
+ * Picks the kie.ai key for a call: the user's own key when provided (BYOK),
+ * otherwise the server's built-in KIE_API_KEY.
+ */
+export function resolveKieKey(userKey?: string | null): string {
+  const own = userKey?.trim();
+  if (own) return own;
+  const serverKey = process.env.KIE_API_KEY?.trim();
+  if (!serverKey) {
     throw new KieError(
-      "مفتاح kie.ai غير مُعد على الخادم (KIE_API_KEY). أضفه إلى متغيرات البيئة.",
+      "مفتاح kie.ai غير مُعد — أضف KIE_API_KEY على الخادم أو أضف مفتاحك الخاص من تبويب توليد الفيديو.",
       500
     );
   }
-  return key;
+  return serverKey;
+}
+
+/**
+ * Cheap, cost-free key check: recordInfo for a bogus task returns code 401
+ * for an invalid key and code 422 ("recordInfo is null") for a valid one.
+ * The available-credits endpoint (/api/v1/chat/credit) is queried best-effort.
+ */
+export async function validateKieKey(
+  key: string
+): Promise<{ valid: boolean; credits: number | null; unreachable?: boolean }> {
+  const auth = { Authorization: `Bearer ${key}` };
+  try {
+    const probe = await fetch(
+      `${KIE_BASE}/api/v1/jobs/recordInfo?taskId=flare-key-probe`,
+      { headers: auth, signal: AbortSignal.timeout(20_000) }
+    );
+    const payload = (await probe.json().catch(() => null)) as { code?: number } | null;
+    const code = payload?.code ?? probe.status;
+    if (code === 401) return { valid: false, credits: null };
+  } catch {
+    return { valid: false, credits: null, unreachable: true };
+  }
+
+  let credits: number | null = null;
+  try {
+    const creditRes = await fetch(`${KIE_BASE}/api/v1/chat/credit`, {
+      headers: auth,
+      signal: AbortSignal.timeout(20_000),
+    });
+    const creditPayload = (await creditRes.json().catch(() => null)) as {
+      code?: number;
+      data?: number;
+    } | null;
+    if (creditPayload?.code === 200 && typeof creditPayload.data === "number") {
+      credits = creditPayload.data;
+    }
+  } catch {
+    // credits are informational — ignore failures
+  }
+  return { valid: true, credits };
 }
 
 /** Maps a kie.ai `code` into a friendly Arabic message (HTTP is always 200). */
@@ -44,9 +94,9 @@ export function mapKieCode(code: number, msg: string): KieError {
     case 200:
       return new KieError(`نجاح غير متوقع مع رسالة: ${msg}`, 200);
     case 401:
-      return new KieError("مفتاح kie.ai على الخادم غير صالح أو منتهي الصلاحية.", 500);
+      return new KieError("مفتاح kie.ai غير صالح أو منتهي الصلاحية.", 500);
     case 402:
-      return new KieError("رصيد kie.ai على الخادم غير كافٍ لتوليد الفيديو.", 402);
+      return new KieError("رصيد kie.ai غير كافٍ لتوليد الفيديو.", 402);
     case 404:
       return new KieError("مهمة الفيديو غير موجودة على kie.ai.", 404);
     case 429:
@@ -90,7 +140,7 @@ export interface GrokVideoInput {
  * service and returns a hosted download URL that the video model can read.
  * Public http(s) URLs pass through unchanged (kie.ai fetches them itself).
  */
-export async function ensureKieImageUrl(rawUrl: string): Promise<string> {
+export async function ensureKieImageUrl(rawUrl: string, userKey?: string | null): Promise<string> {
   const url = rawUrl.trim();
   if (!url) throw new KieError("رابط صورة الإطار فارغ.", 400);
   if (url.startsWith("http://") || url.startsWith("https://")) return url;
@@ -109,7 +159,7 @@ export async function ensureKieImageUrl(rawUrl: string): Promise<string> {
   try {
     res = await fetch(`${KIE_UPLOAD_BASE}/api/file-base64-upload`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${kieKey()}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${resolveKieKey(userKey)}`, "Content-Type": "application/json" },
       signal: AbortSignal.timeout(60_000),
       body: JSON.stringify({
         base64Data: url,
@@ -142,7 +192,7 @@ export async function ensureKieImageUrl(rawUrl: string): Promise<string> {
 /* ------------------------------------------------------------------ */
 
 /** Creates a video generation task and returns the kie.ai taskId. */
-export async function createVideoTask(input: GrokVideoInput): Promise<string> {
+export async function createVideoTask(input: GrokVideoInput, userKey?: string | null): Promise<string> {
   const body: Record<string, unknown> = {
     model: GROK_VIDEO_MODEL,
     input: {
@@ -170,7 +220,7 @@ export async function createVideoTask(input: GrokVideoInput): Promise<string> {
   try {
     res = await fetch(`${KIE_BASE}/api/v1/jobs/createTask`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${kieKey()}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${resolveKieKey(userKey)}`, "Content-Type": "application/json" },
       signal: AbortSignal.timeout(60_000),
       body: JSON.stringify(body),
     });
@@ -216,14 +266,14 @@ interface KieRecordInfoResponse {
   } | null;
 }
 
-/** Fetches the current state of a kie.ai task. */
-export async function getVideoTask(taskId: string): Promise<KieTaskRecord> {
+/** Fetches the current state of a kie.ai task (must use the key that created it). */
+export async function getVideoTask(taskId: string, userKey?: string | null): Promise<KieTaskRecord> {
   let res: Response;
   try {
     res = await fetch(
       `${KIE_BASE}/api/v1/jobs/recordInfo?taskId=${encodeURIComponent(taskId)}`,
       {
-        headers: { Authorization: `Bearer ${kieKey()}` },
+        headers: { Authorization: `Bearer ${resolveKieKey(userKey)}` },
         signal: AbortSignal.timeout(30_000),
       }
     );

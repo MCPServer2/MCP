@@ -323,6 +323,12 @@ const TOOLS: ToolDef[] = [
           type: "boolean",
           description: "Generate audio (dialogue/sound). Default: true.",
         },
+        kie_key: {
+          type: "string",
+          description:
+            "Optional personal kie.ai API key. When provided, the generation is billed to that kie.ai " +
+            "account instead of the server's built-in key. Omit to use the server key.",
+        },
       },
       additionalProperties: false,
     },
@@ -832,6 +838,7 @@ interface ParsedVideoArgs {
   resolution: string;
   duration: number;
   audio: boolean;
+  kieKey: string | null;
 }
 
 /** Validates generate_video arguments; returns an error string or the parsed args. */
@@ -844,6 +851,10 @@ function parseVideoArgs(args: Record<string, unknown>): { error?: string; parsed
     typeof args.end_frame_url === "string" && args.end_frame_url.trim() ? args.end_frame_url.trim() : null;
   const loopFrame =
     typeof args.loop_url === "string" && args.loop_url.trim() ? args.loop_url.trim() : null;
+  const kieKey = typeof args.kie_key === "string" && args.kie_key.trim() ? args.kie_key.trim() : null;
+  if (kieKey && kieKey.length > 256) {
+    return { error: "The provided kie_key is too long." };
+  }
 
   if (!prompt && !imageUrl && !startFrame && !endFrame && !loopFrame) {
     return { error: "Provide a prompt, or at least one frame/image URL to animate." };
@@ -895,6 +906,7 @@ function parseVideoArgs(args: Record<string, unknown>): { error?: string; parsed
       resolution,
       duration,
       audio: args.enable_audio === undefined ? true : Boolean(args.enable_audio),
+      kieKey,
     },
   };
 }
@@ -911,9 +923,10 @@ async function execGenerateVideo(
     return textResult(error ?? "Invalid arguments.", true);
   }
 
-  if (!process.env.KIE_API_KEY?.trim()) {
+  if (!process.env.KIE_API_KEY?.trim() && !parsed.kieKey) {
     return textResult(
-      "Video generation is not configured on the server yet (missing KIE_API_KEY environment variable).",
+      "Video generation is not configured on the server (missing KIE_API_KEY) and no personal kie_key " +
+        "was provided. Add KIE_API_KEY to the server environment or pass your own kie_key argument.",
       true
     );
   }
@@ -936,6 +949,7 @@ async function execGenerateVideo(
     loopFrame: parsed.loopFrame,
     referenceImage: parsed.imageUrl,
     keyframes: parsed.keyframes,
+    kieKey: parsed.kieKey,
   };
 
   // Videos usually finish in 40-120s — wait (bounded) while the SSE stream

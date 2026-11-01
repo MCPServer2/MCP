@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { after } from "next/server";
 import { db } from "@/lib/db";
-import { KieError, MAX_KEYFRAME_S } from "@/lib/kie-server";
+import { KieError, MAX_KEYFRAME_S, validateKieKey } from "@/lib/kie-server";
 import { runVideoGeneration, type VideoRunParams } from "@/lib/video-service";
 import { ASPECT_RATIOS, VIDEO_RESOLUTIONS, type VideoGenerateRequestBody } from "@/lib/types";
 
@@ -55,11 +55,27 @@ export async function POST(request: Request) {
   if (!userToken || userToken.length < 8 || userToken.length > 80) {
     return NextResponse.json({ error: "توكن المستخدم غير صالح." }, { status: 400 });
   }
-  if (!process.env.KIE_API_KEY?.trim()) {
+
+  // Optional personal kie.ai key (BYOK — like the CometAPI image flow).
+  const userKieKey = request.headers.get("x-kie-key")?.trim() ?? "";
+  if (userKieKey.length > 256) {
+    return NextResponse.json({ error: "مفتاح kie.ai المضاف طويل جداً." }, { status: 400 });
+  }
+  if (!process.env.KIE_API_KEY?.trim() && !userKieKey) {
     return NextResponse.json(
-      { error: "توليد الفيديو غير مُعد على الخادم — أضف KIE_API_KEY إلى متغيرات البيئة." },
+      { error: "توليد الفيديو غير مُعد على الخادم — أضف KIE_API_KEY إلى متغيرات البيئة أو أضف مفتاح kie.ai الخاص بك." },
       { status: 500 }
     );
+  }
+  // Reject an obviously-bad personal key up front (free probe — no credits spent).
+  if (userKieKey) {
+    const probe = await validateKieKey(userKieKey);
+    if (!probe.valid && !probe.unreachable) {
+      return NextResponse.json(
+        { error: "مفتاح kie.ai الذي أضفته غير صالح — تحقق منه ثم أعد المحاولة." },
+        { status: 400 }
+      );
+    }
   }
 
   const prompt = body.prompt?.trim() ?? "";
@@ -152,6 +168,7 @@ export async function POST(request: Request) {
       url: String(k.url),
       timestamp: Math.min(Math.max(Number(k.timestamp), 0.1), MAX_KEYFRAME_S),
     })),
+    kieKey: userKieKey || null,
   };
 
   after(async () => {

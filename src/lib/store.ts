@@ -37,6 +37,13 @@ interface FlareState {
   keyUsage: KeyUsageInfo | null;
   setKeyStatus: (status: KeyStatus, usage?: KeyUsageInfo | null) => void;
 
+  // kie.ai key for video generation (persisted locally in the browser only)
+  kieKey: string;
+  setKieKey: (key: string) => void;
+  kieKeyStatus: KeyStatus;
+  kieCredits: number | null;
+  setKieKeyStatus: (status: KeyStatus, credits?: number | null) => void;
+
   // Generator settings (persisted)
   mode: GenerationMode;
   setMode: (mode: GenerationMode) => void;
@@ -88,6 +95,13 @@ export const useFlareStore = create<FlareState>()(
       keyStatus: "empty",
       keyUsage: null,
       setKeyStatus: (status, usage = null) => set({ keyStatus: status, keyUsage: usage }),
+
+      kieKey: "",
+      setKieKey: (key) =>
+        set({ kieKey: key.trim(), kieKeyStatus: key.trim() ? "unknown" : "empty", kieCredits: null }),
+      kieKeyStatus: "empty",
+      kieCredits: null,
+      setKieKeyStatus: (status, credits = null) => set({ kieKeyStatus: status, kieCredits: credits }),
 
       mode: "generate",
       setMode: (mode) => set({ mode }),
@@ -148,6 +162,7 @@ export const useFlareStore = create<FlareState>()(
       partialize: (state) => ({
         userToken: state.userToken,
         apiKey: state.apiKey,
+        kieKey: state.kieKey,
         mode: state.mode,
         settings: state.settings,
       }),

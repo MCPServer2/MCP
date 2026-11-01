@@ -64,6 +64,36 @@ const ar = {
     unit: "وحدة",
   },
 
+  kieKey: {
+    sectionAria: "إدارة مفتاح kie.ai",
+    heading: "مفتاح kie.ai الخاص بك",
+    getLink: "احصل على مفتاح من kie.ai",
+    inputAria: "مفتاح kie.ai",
+    showKey: "إظهار المفتاح",
+    hideKey: "إخفاء المفتاح",
+    save: "حفظ",
+    check: "فحص وتفعيل",
+    enterFirst: "أدخل المفتاح أولاً",
+    saved: "تم حفظ المفتاح في متصفحك بنجاح",
+    savedDesc: "سيُستخدم مفتاحك في توليد الفيديو بدلاً من مفتاح الخادم.",
+    invalid: "المفتاح غير صالح",
+    checkFailed: "تعذر الاتصال بالخادم للتحقق",
+    valid: "المفتاح صالح وجاهز للاستخدام 🎉",
+    balanceDesc: "رصيد kie.ai المتاح: {q}",
+    badgeValid: "مفتاح صالح",
+    badgeChecking: "جارٍ الفحص…",
+    badgeInvalid: "مفتاح غير صالح",
+    badgeSaved: "محفوظ — لم يُفحص",
+    badgeNone: "لم يُضف مفتاح بعد",
+    credits: "الرصيد المتاح: ",
+    unit: "كريدت",
+    optionalNote:
+      "اختياري — اتركه فارغاً لاستخدام المفتاح المدمج على الخادم. عند إضافة مفتاحك يُستخدم في كل عمليات توليد الفيديو الخاصة بمعرّفك.",
+    privacyA: "مفتاحك يُحفظ محلياً في متصفحك فقط ومرتبط بمعرّفك الخاص",
+    privacyB:
+      "— لا يُخزَّن على خادمنا، ويُرسل مشفّراً مع كل عملية توليد فيديو مباشرة إلى kie.ai. لا يمكن لأي مستخدم آخر رؤيته أو استخدامه.",
+  },
+
   footer: {
     tagline: "استوديو Flare — توليد الصور بنموذج",
     perVisitor: "معرّف خاص لكل زائر",
@@ -355,7 +385,7 @@ const ar = {
     toolCheck: "متابعة مهمة قيد التوليد",
     toolGet: "جلب صورة محفوظة بمعرّفها وعرضها داخل الشات",
     toolList: "عرض أحدث صور معرضك",
-    toolVideoGenerate: "توليد فيديو — نص، صورة متحركة، إطارات بداية/نهاية، تكرار، إطارات مفتاحية",
+    toolVideoGenerate: "توليد فيديو — نص، صورة متحركة، إطارات بداية/نهاية، تكرار، إطارات مفتاحية، مع دعم مفتاح kie.ai الخاص (اختياري)",
     toolVideoCheck: "متابعة مهمة فيديو قيد التوليد",
     toolVideoGet: "جلب فيديو محفوظ بمعرّفه ومشاركة رابطه داخل الشات",
     toolVideoList: "عرض أحدث فيديوهات مكتبتك",
@@ -421,6 +451,36 @@ const en: Dict = {
       "— it is never stored on our servers, and it is sent encrypted with every generation request straight to CometAPI. No other user can see or use it.",
     unlimited: "Unlimited",
     unit: "units",
+  },
+
+  kieKey: {
+    sectionAria: "Manage your kie.ai key",
+    heading: "Your kie.ai API key",
+    getLink: "Get a key from kie.ai",
+    inputAria: "kie.ai API key",
+    showKey: "Show key",
+    hideKey: "Hide key",
+    save: "Save",
+    check: "Check & activate",
+    enterFirst: "Enter the key first",
+    saved: "Key saved in your browser successfully",
+    savedDesc: "Your own key will be used for video generation instead of the server key.",
+    invalid: "Invalid key",
+    checkFailed: "Could not reach the server to verify",
+    valid: "Key is valid and ready to use 🎉",
+    balanceDesc: "Available kie.ai credits: {q}",
+    badgeValid: "Valid key",
+    badgeChecking: "Checking…",
+    badgeInvalid: "Invalid key",
+    badgeSaved: "Saved — not verified",
+    badgeNone: "No key added yet",
+    credits: "Available credits: ",
+    unit: "credit",
+    optionalNote:
+      "Optional — leave empty to use the built-in server key. When you add your own key, it is used for every video generation tied to your token.",
+    privacyA: "Your key is stored locally in your browser only and tied to your personal ID",
+    privacyB:
+      " — it is never stored on our servers, and it is sent encrypted with every video generation request straight to kie.ai. No other user can see or use it.",
   },
 
   footer: {
@@ -718,7 +778,7 @@ const en: Dict = {
     toolCheck: "Follow a running generation",
     toolGet: "Fetch a stored image by id and show it in the chat",
     toolList: "List your latest gallery images",
-    toolVideoGenerate: "Generate a video — text, animated image, start/end frames, loop, keyframes",
+    toolVideoGenerate: "Generate a video — text, animated image, start/end frames, loop, keyframes, optional personal kie.ai key",
     toolVideoCheck: "Follow a running video generation",
     toolVideoGet: "Fetch a stored video by id and share its URL in the chat",
     toolVideoList: "List your latest video library items",
@@ -852,6 +912,16 @@ const SERVER_ERROR_EN: Record<string, string> = {
   "تعذر الاتصال بـ CometAPI للتحقق.": "Could not reach CometAPI for verification.",
   "العنصر غير موجود أو لا يخصك.": "Item not found or not yours.",
   "الصورة غير موجودة أو لا يحق لك الوصول.": "Image not found or you cannot access it.",
+  "مفتاح kie.ai غير صالح أو منتهي الصلاحية.": "Invalid or expired kie.ai API key.",
+  "رصيد kie.ai غير كافٍ لتوليد الفيديو.": "Insufficient kie.ai credits to generate the video.",
+  "مفتاح kie.ai غير مُعد — أضف KIE_API_KEY على الخادم أو أضف مفتاحك الخاص من تبويب توليد الفيديو.":
+    "kie.ai is not configured — add KIE_API_KEY on the server or provide your own key from the video tab.",
+  "مفتاح kie.ai غير صالح.": "Invalid kie.ai key.",
+  "مفتاح kie.ai الذي أضفته غير صالح — تحقق منه ثم أعد المحاولة.":
+    "The kie.ai key you added is invalid — check it and try again.",
+  "مفتاح kie.ai المضاف طويل جداً.": "The added kie.ai key is too long.",
+  "توليد الفيديو غير مُعد على الخادم — أضف KIE_API_KEY إلى متغيرات البيئة أو أضف مفتاح kie.ai الخاص بك.":
+    "Video generation is not configured on the server — add KIE_API_KEY to the environment or provide your own kie.ai key.",
 };
 
 export function serverMsg(message: string | null | undefined, lang: Lang): string {

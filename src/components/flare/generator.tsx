@@ -47,6 +47,7 @@ import { SketchUpload } from "./sketch-upload";
 import { SketchDrawer } from "./sketch-drawer";
 import { RefUpload } from "./ref-upload";
 import { VideoForm, type VideoFormValue } from "./video-form";
+import { KieKeyBar } from "./kie-key-bar";
 
 const POLL_INTERVAL_MS = 2000;
 const POLL_MAX_WAIT_MS = 300_000; // upstream timeout is 280s
@@ -241,6 +242,7 @@ export function Generator() {
 
   const submitVideo = async (): Promise<boolean> => {
     const tNow = translations[useLangStore.getState().lang];
+    const kieKey = useFlareStore.getState().kieKey;
     const trimmed = video.prompt.trim();
     const hasFrame = Boolean(
       video.startFrame || video.endFrame || video.loopFrame || video.refImage || video.keyframes.some((k) => k.url)
@@ -263,7 +265,10 @@ export function Generator() {
 
     const res = await fetch("/api/video", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(kieKey ? { "x-kie-key": kieKey } : {}),
+      },
       body: JSON.stringify({
         userToken: useFlareStore.getState().userToken,
         prompt: trimmed,
@@ -569,6 +574,7 @@ export function Generator() {
           </TabsContent>
 
           <TabsContent value="video" className="mt-0 space-y-4">
+            <KieKeyBar />
             <VideoForm
               value={video}
               onChange={(patch) => setVideo((v) => ({ ...v, ...patch }))}

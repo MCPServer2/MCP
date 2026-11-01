@@ -64,3 +64,6 @@ server.log
 # sandbox scaffold (not part of the app)
 /tests/
 /download/
+
+# user uploads (local only)
+/upload/
