@@ -901,6 +901,10 @@ export function shortQualityLabel(lang: Lang, value: string): string {
 const SERVER_ERROR_EN: Record<string, string> = {
   "مفتاح API غير صالح أو منتهي الصلاحية. تأكد من إضافة مفتاح CometAPI صحيح.":
     "Invalid or expired API key. Make sure you added a correct CometAPI key.",
+  "رصيد حساب CometAPI غير كافٍ — المفتاح صالح لكن يجب شحن الرصيد أولاً من cometapi.com.":
+    "Insufficient CometAPI account balance — the key is valid, but the account must be topped up first at cometapi.com.",
+  "الوصول مرفوض (403) — المفتاح لا يملك صلاحية لهذا الطلب أو النموذج.":
+    "Access denied (403) — this key has no permission for this request or model.",
   "تم تجاوز حد معدل الطلبات (429). انتظر قليلاً ثم أعد المحاولة.":
     "Rate limit exceeded (429). Wait a moment and try again.",
   "الرصيد غير كافٍ في مفتاح CometAPI الخاص بك.":

@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { decryptSecret } from "./key-vault";
+import { decryptSecret, encryptSecret, needsReencryption } from "./key-vault";
 import type { GenerationMode, KeyUsageInfo } from "./types";
 
 export const COMET_BASE = "https://api.cometapi.com";
@@ -16,29 +16,51 @@ export class CometError extends Error {
 
 export function mapUpstreamError(status: number, body: string): CometError {
   let detail = "";
+  let code = "";
   try {
     const parsed = JSON.parse(body) as {
-      error?: { message?: string } | string;
+      error?: { message?: string; code?: string } | string;
       message?: string;
+      code?: string;
     };
     if (typeof parsed.error === "string") detail = parsed.error;
-    else detail = parsed.error?.message ?? parsed.message ?? "";
+    else {
+      detail = parsed.error?.message ?? parsed.message ?? "";
+      code = parsed.error?.code ?? parsed.code ?? "";
+    }
   } catch {
     detail = body.slice(0, 300);
   }
 
+  // CometAPI reports a ZERO ACCOUNT BALANCE as HTTP 403 with code
+  // "insufficient_user_quota" ("pre-consume quota failed, organization and
+  // owner combined quota is zero"). The key itself is VALID — labelling this
+  // "invalid key" sends the user down the wrong debugging path, so it must be
+  // surfaced as a balance problem.
+  const haystack = `${detail} ${code}`.toLowerCase();
+  const insufficientQuota =
+    code === "insufficient_user_quota" ||
+    haystack.includes("insufficient_user_quota") ||
+    haystack.includes("pre-consume quota failed") ||
+    haystack.includes("quota is zero") ||
+    haystack.includes("insufficient quota");
+
   const msg =
-    status === 401 || status === 403
-      ? "مفتاح API غير صالح أو منتهي الصلاحية. تأكد من إضافة مفتاح CometAPI صحيح."
-      : status === 429
-        ? "تم تجاوز حد معدل الطلبات (429). انتظر قليلاً ثم أعد المحاولة."
-        : status === 402
-          ? "الرصيد غير كافٍ في مفتاح CometAPI الخاص بك."
-          : status >= 500
-            ? "خطأ في خوادم CometAPI. أعد المحاولة بعد قليل."
-            : detail
-              ? `رفض المزود الطلب: ${detail}`
-              : `فشل الطلب (${status}). أعد المحاولة.`;
+    insufficientQuota
+      ? "رصيد حساب CometAPI غير كافٍ — المفتاح صالح لكن يجب شحن الرصيد أولاً من cometapi.com."
+      : status === 401
+        ? "مفتاح API غير صالح أو منتهي الصلاحية. تأكد من إضافة مفتاح CometAPI صحيح."
+        : status === 403
+          ? "الوصول مرفوض (403) — المفتاح لا يملك صلاحية لهذا الطلب أو النموذج."
+          : status === 429
+            ? "تم تجاوز حد معدل الطلبات (429). انتظر قليلاً ثم أعد المحاولة."
+            : status === 402
+              ? "الرصيد غير كافٍ في مفتاح CometAPI الخاص بك."
+              : status >= 500
+                ? "خطأ في خوادم CometAPI. أعد المحاولة بعد قليل."
+                : detail
+                  ? `رفض المزود الطلب: ${detail}`
+                  : `فشل الطلب (${status}). أعد المحاولة.`;
 
   return new CometError(msg, status);
 }
@@ -98,6 +120,10 @@ export function sanitizeMode(mode: unknown): GenerationMode {
  * Reads the CometAPI key the user saved from the images tab (encrypted in the
  * database, bound to their FLR- token). Returns null when nothing is saved or
  * the ciphertext can no longer be decrypted.
+ *
+ * Self-healing: rows encrypted by an environment whose vault secret differed
+ * (legacy DATABASE_URL-based secrets) are transparently re-encrypted with the
+ * canonical secret on first successful read.
  */
 export async function getUserCometKey(userToken: string): Promise<string | null> {
   try {
@@ -106,25 +132,41 @@ export async function getUserCometKey(userToken: string): Promise<string | null>
       select: { cometApiKey: true },
     });
     if (!row?.cometApiKey) return null;
-    return decryptSecret(row.cometApiKey);
+    const plain = decryptSecret(row.cometApiKey);
+    if (plain && needsReencryption(row.cometApiKey)) {
+      // Best-effort lazy migration to the canonical vault secret.
+      try {
+        await db.userKey.update({
+          where: { userToken },
+          data: { cometApiKey: encryptSecret(plain) },
+        });
+      } catch {
+        // ignore — the key still works via the keyring
+      }
+    }
+    return plain;
   } catch {
     return null;
   }
 }
 
 /**
- * Full key resolution for a generation run: explicitly-supplied key (header /
- * MCP argument) → key saved in the database for this token. Unlike kie.ai
- * there is no server-wide CometAPI key — BYOK only. Returns null when no key
- * is available; callers turn that into an actionable message.
+ * Full key resolution for a generation run: the key saved ENCRYPTED in the
+ * vault (UserKey table) for this token ALWAYS wins — the key the account owner
+ * added on the website is the account's key. An explicitly-supplied key
+ * (x-cometapi-key header / MCP api_key argument / legacy &key= URL parameter)
+ * is only a FALLBACK for tokens with nothing saved — a stale key embedded in
+ * an old MCP URL must never shadow the vault. Returns null when no key is
+ * available; callers turn that into an actionable message.
  */
 export async function resolveCometKeyForUser(
   userToken: string,
   userKey?: string | null
 ): Promise<string | null> {
+  const saved = await getUserCometKey(userToken);
+  if (saved) return saved;
   const own = userKey?.trim();
-  if (own) return own;
-  return getUserCometKey(userToken);
+  return own || null;
 }
 
 /**
@@ -140,7 +182,11 @@ export async function validateCometKey(
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) return { valid: false };
+    if (!response.ok) {
+      // Upstream 5xx (or odd statuses) must NOT mark a possibly-valid key as
+      // invalid — callers store it as "unreachable" instead of rejecting it.
+      return { valid: false, unreachable: response.status >= 500 || response.status === 408 };
+    }
 
     const payload = (await response.json().catch(() => null)) as {
       code?: boolean;

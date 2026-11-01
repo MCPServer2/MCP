@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { encryptSecret, decryptSecret, maskKey } from "@/lib/key-vault";
+import { decryptSecret, encryptSecret, maskKey, needsReencryption } from "@/lib/key-vault";
 import { validateCometKey } from "@/lib/comet-server";
 
 /**
@@ -29,6 +29,17 @@ async function statusPayload(userToken: string) {
     select: { cometApiKey: true, cometName: true, cometAvailable: true, cometUnlimited: true },
   });
   const plain = row?.cometApiKey ? decryptSecret(row.cometApiKey) : null;
+  if (plain && row.cometApiKey && needsReencryption(row.cometApiKey)) {
+    // Self-heal: migrate legacy-encrypted rows to the canonical vault secret.
+    try {
+      await db.userKey.update({
+        where: { userToken },
+        data: { cometApiKey: encryptSecret(plain) },
+      });
+    } catch {
+      // best-effort — reads keep working via the keyring
+    }
+  }
   return {
     configured: Boolean(plain),
     keyPreview: plain ? maskKey(plain) : null,

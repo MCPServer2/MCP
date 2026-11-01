@@ -60,9 +60,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "توكن المستخدم غير صالح." }, { status: 400 });
   }
 
-  // Key resolution: explicit per-request header → the key saved encrypted in
-  // the vault (UserKey table) for this token. The website normally sends no
-  // header at all — the vault key powers web AND MCP generations alike.
+  // Key resolution: the key saved encrypted in the vault (UserKey table) for
+  // this token ALWAYS wins — the key added on the website is the account's
+  // key. The x-cometapi-key header is only a fallback for tokens with nothing
+  // saved. The vault key powers web AND MCP generations alike.
   const headerKey = request.headers.get("x-cometapi-key")?.trim() || null;
   const apiKey = await resolveCometKeyForUser(userToken, headerKey);
   if (!apiKey) {

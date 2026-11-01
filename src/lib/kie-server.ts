@@ -16,7 +16,7 @@
  */
 
 import { db } from "@/lib/db";
-import { decryptSecret } from "@/lib/key-vault";
+import { decryptSecret, encryptSecret, needsReencryption } from "@/lib/key-vault";
 
 export const KIE_BASE = "https://api.kie.ai";
 export const KIE_UPLOAD_BASE = "https://kieai.redpandaai.co";
@@ -57,6 +57,9 @@ export function resolveKieKey(userKey?: string | null): string {
  * Reads the kie.ai key the user saved from the video tab (encrypted in the
  * database, bound to their FLR- token). Returns null when nothing is saved or
  * the ciphertext can no longer be decrypted.
+ *
+ * Self-healing: rows encrypted with a legacy vault secret are re-encrypted
+ * with the canonical secret on first successful read (see key-vault.ts).
  */
 export async function getUserKieKey(userToken: string): Promise<string | null> {
   try {
@@ -65,7 +68,18 @@ export async function getUserKieKey(userToken: string): Promise<string | null> {
       select: { kieApiKey: true },
     });
     if (!row?.kieApiKey) return null;
-    return decryptSecret(row.kieApiKey);
+    const plain = decryptSecret(row.kieApiKey);
+    if (plain && needsReencryption(row.kieApiKey)) {
+      try {
+        await db.userKey.update({
+          where: { userToken },
+          data: { kieApiKey: encryptSecret(plain) },
+        });
+      } catch {
+        // ignore — the key still works via the keyring
+      }
+    }
+    return plain;
   } catch {
     return null;
   }

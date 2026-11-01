@@ -25,9 +25,11 @@ import { serverMsg } from "@/lib/i18n";
  * - Stateless: no session ids, no server-initiated streams (GET/DELETE → 405).
  *
  * Credentials: token = the anonymous FLR- gallery id (required in the URL).
- * The CometAPI key is OPTIONAL in the URL (&key=…) — when omitted, the key the
- * account owner saved ENCRYPTED in the database (images tab) is used, so the
- * URL alone is enough for image generations from external chat clients.
+ * The CometAPI key saved ENCRYPTED in the database (images tab) ALWAYS wins —
+ * the URL alone is enough for image generations from external chat clients.
+ * A legacy &key=… URL parameter is still accepted, but only as a fallback
+ * when the account has no saved key, so an old stale key can never shadow
+ * the one stored in the database.
  */
 
 export const MCP_SERVER_INFO = {
@@ -609,8 +611,10 @@ async function execGenerateImage(
 ): Promise<ToolResult> {
   const token = creds.token as string;
 
-  // Key resolution: api_key argument → &key= URL parameter → the key saved
-  // encrypted in the vault (UserKey table) for this token.
+  // Key resolution: the key saved encrypted in the vault (UserKey table) for
+  // this token ALWAYS wins — a stale key embedded in an old MCP URL or tool
+  // call must never shadow the account's saved key. The api_key argument and
+  // the legacy &key= URL parameter are only fallbacks when nothing is saved.
   const argKey = typeof args.api_key === "string" && args.api_key.trim() ? args.api_key.trim() : null;
   if (argKey && argKey.length > 256) {
     return textResult("The provided api_key is too long.", true);
@@ -620,7 +624,8 @@ async function execGenerateImage(
     return textResult(
       "Image generation is not configured for this account: no CometAPI key was saved on the website " +
         "(images tab → save your CometAPI key) and no api_key argument or &key= URL parameter was provided. " +
-        "The account owner can save their key once on the website, or pass an api_key argument.",
+        "The account owner can save their key once on the website (it is stored encrypted in the " +
+        "database and used automatically), or pass an api_key argument.",
       true
     );
   }
