@@ -5,13 +5,18 @@
  * - POST /api/v1/jobs/createTask  → { code, data: { taskId } }
  * - GET  /api/v1/jobs/recordInfo?taskId=… → { code, data: { state, resultJson, failMsg } }
  *
- * Keys: the built-in key lives in the server environment (KIE_API_KEY). Users
- * may also supply their own kie.ai key (BYOK, like the CometAPI image flow) —
- * it arrives via the x-kie-key header / MCP kie_key argument and is used for
- * their video generations instead. The server env key is never exposed to the
- * browser; a user-supplied key is only stored on the Job row (kieKey) so the
+ * Keys (BYOK, like the CometAPI image flow), in priority order:
+ *  1. Per-request key via the x-kie-key header / MCP kie_key argument.
+ *  2. The key the user saved from the video tab — encrypted in the UserKey
+ *     table and bound to their FLR- token (getUserKieKey). This makes the key
+ *     work from the MCP server too, without re-sending it on every call.
+ *  3. The server's built-in KIE_API_KEY environment variable.
+ * A per-request key is additionally stored on the Job row (kieKey) so the
  * recovery path can query the correct kie.ai account after a worker restart.
  */
+
+import { db } from "@/lib/db";
+import { decryptSecret } from "@/lib/key-vault";
 
 export const KIE_BASE = "https://api.kie.ai";
 export const KIE_UPLOAD_BASE = "https://kieai.redpandaai.co";
@@ -46,6 +51,39 @@ export function resolveKieKey(userKey?: string | null): string {
     );
   }
   return serverKey;
+}
+
+/**
+ * Reads the kie.ai key the user saved from the video tab (encrypted in the
+ * database, bound to their FLR- token). Returns null when nothing is saved or
+ * the ciphertext can no longer be decrypted.
+ */
+export async function getUserKieKey(userToken: string): Promise<string | null> {
+  try {
+    const row = await db.userKey.findUnique({
+      where: { userToken },
+      select: { kieApiKey: true },
+    });
+    if (!row?.kieApiKey) return null;
+    return decryptSecret(row.kieApiKey);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Full key resolution for a generation run: explicitly-supplied key (header /
+ * MCP argument) → key saved in the database for this token → server env key.
+ */
+export async function resolveKieKeyForUser(
+  userToken: string,
+  userKey?: string | null
+): Promise<string> {
+  const own = userKey?.trim();
+  if (own) return own;
+  const saved = await getUserKieKey(userToken);
+  if (saved) return saved;
+  return resolveKieKey();
 }
 
 /**

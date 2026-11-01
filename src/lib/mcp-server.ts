@@ -4,6 +4,7 @@ import { runGeneration, type RunParams } from "@/lib/generation-service";
 import {
   KieError,
   MAX_KEYFRAME_S,
+  getUserKieKey,
 } from "@/lib/kie-server";
 import {
   recoverVideoJob,
@@ -253,10 +254,12 @@ const TOOLS: ToolDef[] = [
       "Supports pure text-to-video, animating an input image (image_url), a Start Frame and/or End Frame " +
       "(start_frame_url / end_frame_url), a Loop frame (loop_url — used as both first and last frame, " +
       "cannot be combined with start/end frames) and up to 4 mid-video keyframes " +
-      "(keyframes: [{url, timestamp_s}]). Videos typically finish in 40-120 seconds; if the tool replies " +
-      "that the job is still running, poll it with check_video_job. The finished video is saved to the " +
-      "user's private library; the result text contains its direct playable URL — share it in the chat " +
-      "and embed it as a plain markdown link so the user can open/download it.",
+      "(keyframes: [{url, timestamp_s}]). Billing uses the kie.ai key the account owner saved on the " +
+      "website automatically — pass kie_key only to override it for this one call. Videos typically " +
+      "finish in 40-120 seconds; if the tool replies that the job is still running, poll it with " +
+      "check_video_job. The finished video is saved to the user's private library; the result text " +
+      "contains its direct playable URL — share it in the chat and embed it as a plain markdown link " +
+      "so the user can open/download it.",
     inputSchema: {
       type: "object",
       properties: {
@@ -326,8 +329,9 @@ const TOOLS: ToolDef[] = [
         kie_key: {
           type: "string",
           description:
-            "Optional personal kie.ai API key. When provided, the generation is billed to that kie.ai " +
-            "account instead of the server's built-in key. Omit to use the server key.",
+            "Optional personal kie.ai API key. When omitted, the key the account owner saved on the " +
+            "website (video tab) is used automatically, falling back to the server's built-in key. " +
+            "Pass it only to bill this one generation to a different kie.ai account.",
         },
       },
       additionalProperties: false,
@@ -924,11 +928,18 @@ async function execGenerateVideo(
   }
 
   if (!process.env.KIE_API_KEY?.trim() && !parsed.kieKey) {
-    return textResult(
-      "Video generation is not configured on the server (missing KIE_API_KEY) and no personal kie_key " +
-        "was provided. Add KIE_API_KEY to the server environment or pass your own kie_key argument.",
-      true
-    );
+    // No env key and no per-call key — try the key saved on the website for
+    // this account (encrypted in the vault, resolved inside the pipeline too,
+    // but checked here to fail fast with an actionable message).
+    const savedKey = await getUserKieKey(token);
+    if (!savedKey) {
+      return textResult(
+        "Video generation is not configured for this account: no kie.ai key was saved on the website " +
+          "(video tab → save your kie.ai key) and the server has no built-in KIE_API_KEY. The account " +
+          "owner can save their key once on the website, or you can pass a kie_key argument.",
+        true
+      );
+    }
   }
 
   const job = await db.job.create({
@@ -1169,9 +1180,10 @@ async function dispatchRequest(
           "poll a running generation, get_image / list_recent_images for the gallery. Videos: the Grok Imagine " +
           "model (grok-imagine-video-1-5-preview) — use generate_video for text-to-video, image animation, " +
           "Start/End frames, Loop frames and keyframes; poll with check_video_job, and use get_video / " +
-          "list_recent_videos for the video library. Image results include ready-to-use markdown image links " +
-          "(embed them as ![image](url) in your reply); video results include direct playable URLs (paste them " +
-          "in your reply and embed as markdown links).",
+          "list_recent_videos for the video library. Video billing uses the kie.ai key saved on the website " +
+          "for this account automatically — never ask the user for a key, just call generate_video. Image " +
+          "results include ready-to-use markdown image links (embed them as ![image](url) in your reply); " +
+          "video results include direct playable URLs (paste them in your reply and embed as markdown links).",
       });
     }
 

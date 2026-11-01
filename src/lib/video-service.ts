@@ -5,6 +5,7 @@ import {
   createVideoTask,
   ensureKieImageUrl,
   getVideoTask,
+  getUserKieKey,
   type VideoKeyframe,
 } from "@/lib/kie-server";
 import type { VideoItem } from "@/lib/types";
@@ -140,16 +141,20 @@ export async function runVideoGeneration(p: VideoRunParams): Promise<void> {
   });
   if (claimed.count === 0) return;
 
+  // Key priority: per-request key → key saved in the vault for this token →
+  // server's built-in KIE_API_KEY (resolveKieKey throws when none exists).
+  const kieKey = p.kieKey || (await getUserKieKey(p.userToken));
+
   // 2) Make sure every frame is a URL the video model can download.
   const [startFrame, endFrame, loopFrame, referenceImage] = await Promise.all([
-    p.startFrame ? ensureKieImageUrl(p.startFrame, p.kieKey) : Promise.resolve(null),
-    p.endFrame ? ensureKieImageUrl(p.endFrame, p.kieKey) : Promise.resolve(null),
-    p.loopFrame ? ensureKieImageUrl(p.loopFrame, p.kieKey) : Promise.resolve(null),
-    p.referenceImage ? ensureKieImageUrl(p.referenceImage, p.kieKey) : Promise.resolve(null),
+    p.startFrame ? ensureKieImageUrl(p.startFrame, kieKey) : Promise.resolve(null),
+    p.endFrame ? ensureKieImageUrl(p.endFrame, kieKey) : Promise.resolve(null),
+    p.loopFrame ? ensureKieImageUrl(p.loopFrame, kieKey) : Promise.resolve(null),
+    p.referenceImage ? ensureKieImageUrl(p.referenceImage, kieKey) : Promise.resolve(null),
   ]);
   const keyframes: VideoKeyframe[] = [];
   for (const k of p.keyframes ?? []) {
-    keyframes.push({ url: await ensureKieImageUrl(k.url, p.kieKey), timestamp: k.timestamp });
+    keyframes.push({ url: await ensureKieImageUrl(k.url, kieKey), timestamp: k.timestamp });
   }
 
   // 3) Create the upstream task and remember its id + key for recovery.
@@ -164,8 +169,8 @@ export async function runVideoGeneration(p: VideoRunParams): Promise<void> {
     loopUrl: loopFrame ?? undefined,
     keyframes: keyframes.length ? keyframes : undefined,
     enableAudio: p.audio,
-  }, p.kieKey);
-  await db.job.update({ where: { id: p.jobId }, data: { taskId, kieKey: p.kieKey || null } });
+  }, kieKey);
+  await db.job.update({ where: { id: p.jobId }, data: { taskId, kieKey: kieKey || null } });
 
   // 4) Poll until the MP4 is ready (or the poll budget runs out).
   const deadline = Date.now() + POLL_BUDGET_MS;
@@ -175,7 +180,7 @@ export async function runVideoGeneration(p: VideoRunParams): Promise<void> {
       // Keep the job processing — recovery paths finish it via the taskId.
       return;
     }
-    const record = await getVideoTask(taskId, p.kieKey);
+    const record = await getVideoTask(taskId, kieKey);
     if (record.state === "success" && record.resultUrls.length > 0) {
       await storeFinishedVideo(p.jobId, p.userToken, taskId, record.resultUrls[0], p, record.credits);
       return;
@@ -209,7 +214,9 @@ export async function recoverVideoJob(jobId: string): Promise<void> {
   if (!(await claimJob(jobId, true))) return;
 
   try {
-    const record = await getVideoTask(job.taskId, job.kieKey);
+    // Same key priority as the original run: the stored per-request key, then
+    // the vault key for this token, then the server key.
+    const record = await getVideoTask(job.taskId, job.kieKey || (await getUserKieKey(job.userToken)));
     if (record.state === "success" && record.resultUrls.length > 0) {
       await storeFinishedVideo(
         jobId,

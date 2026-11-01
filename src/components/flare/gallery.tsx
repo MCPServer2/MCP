@@ -33,22 +33,22 @@ export function Gallery() {
   const setGalleryLoading = useFlareStore((s) => s.setGalleryLoading);
   const openViewer = useFlareStore((s) => s.openViewer);
 
-  const refresh = useCallback(
-    async (token: string) => {
-      if (!token) return;
+  const refresh = useCallback((token: string, isRetry = false) => {
+    const run = async (retry: boolean): Promise<void> => {
       setGalleryLoading(true);
       try {
         const res = await fetch(`/api/gallery?token=${encodeURIComponent(token)}`);
         const data = (await res.json()) as { items?: GenerationItem[] };
         if (res.ok && data.items) setGallery(data.items);
       } catch {
-        // silent — gallery is non-critical
+        // Transient failure (e.g. dev-server cold start) — retry once, then give up silently.
+        if (!retry) setTimeout(() => void run(true), 2_500);
       } finally {
         setGalleryLoading(false);
       }
-    },
-    [setGallery, setGalleryLoading]
-  );
+    };
+    if (token) void run(isRetry);
+  }, [setGallery, setGalleryLoading]);
 
   useEffect(() => {
     if (userToken) void refresh(userToken);

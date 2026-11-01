@@ -74,8 +74,11 @@ const ar = {
     save: "حفظ",
     check: "فحص وتفعيل",
     enterFirst: "أدخل المفتاح أولاً",
-    saved: "تم حفظ المفتاح في متصفحك بنجاح",
-    savedDesc: "سيُستخدم مفتاحك في توليد الفيديو بدلاً من مفتاح الخادم.",
+    remove: "إزالة",
+    saved: "تم حفظ المفتاح في قاعدة البيانات بنجاح",
+    savedDesc: "سيُستخدم مفتاحك تلقائياً في توليد الفيديو من الموقع ومن أدوات MCP دون إعادة إدخاله.",
+    removed: "تم حذف المفتاح المحفوظ",
+    removedDesc: "سيعود توليد الفيديو إلى استخدام المفتاح المدمج على الخادم.",
     invalid: "المفتاح غير صالح",
     checkFailed: "تعذر الاتصال بالخادم للتحقق",
     valid: "المفتاح صالح وجاهز للاستخدام 🎉",
@@ -85,19 +88,21 @@ const ar = {
     badgeInvalid: "مفتاح غير صالح",
     badgeSaved: "محفوظ — لم يُفحص",
     badgeNone: "لم يُضف مفتاح بعد",
+    previewLabel: "المفتاح المحفوظ:",
+    serverNote: "لا يوجد مفتاح خاص مضاف — سيُستخدم المفتاح المدمج على الخادم.",
     credits: "الرصيد المتاح: ",
     unit: "كريدت",
     optionalNote:
-      "اختياري — اتركه فارغاً لاستخدام المفتاح المدمج على الخادم. عند إضافة مفتاحك يُستخدم في كل عمليات توليد الفيديو الخاصة بمعرّفك.",
-    privacyA: "مفتاحك يُحفظ محلياً في متصفحك فقط ومرتبط بمعرّفك الخاص",
+      "اختياري — اتركه فارغاً لاستخدام المفتاح المدمج على الخادم. عند إضافة مفتاحك يُستخدم في كل عمليات توليد الفيديو الخاصة بمعرّفك، من الموقع وعبر أدوات MCP.",
+    privacyA: "مفتاحك يُحفظ مشفّراً (AES-256-GCM) في قاعدة البيانات ومرتبطاً بمعرّفك الخاص",
     privacyB:
-      "— لا يُخزَّن على خادمنا، ويُرسل مشفّراً مع كل عملية توليد فيديو مباشرة إلى kie.ai. لا يمكن لأي مستخدم آخر رؤيته أو استخدامه.",
+      "— يُستخدم تلقائياً في توليد الفيديو من الموقع ومن أدوات MCP في أي محادثة دون إعادة إدخاله، ولا يمكن لأي مستخدم آخر رؤيته أو استخدامه.",
   },
 
   footer: {
     tagline: "استوديو Flare — توليد الصور بنموذج",
     perVisitor: "معرّف خاص لكل زائر",
-    keysLocal: "مفاتيحك محفوظة في متصفحك فقط",
+    keysLocal: "مفتاح الصور في متصفحك، ومفتاح الفيديو مشفّر في قاعدة البيانات",
   },
 
   generator: {
@@ -463,8 +468,11 @@ const en: Dict = {
     save: "Save",
     check: "Check & activate",
     enterFirst: "Enter the key first",
-    saved: "Key saved in your browser successfully",
-    savedDesc: "Your own key will be used for video generation instead of the server key.",
+    remove: "Remove",
+    saved: "Key saved to the database successfully",
+    savedDesc: "Your key will now be used automatically for video generation — on the website and via MCP tools.",
+    removed: "Saved key removed",
+    removedDesc: "Video generation falls back to the server's built-in key.",
     invalid: "Invalid key",
     checkFailed: "Could not reach the server to verify",
     valid: "Key is valid and ready to use 🎉",
@@ -474,19 +482,21 @@ const en: Dict = {
     badgeInvalid: "Invalid key",
     badgeSaved: "Saved — not verified",
     badgeNone: "No key added yet",
+    previewLabel: "Saved key:",
+    serverNote: "No personal key added yet — the server's built-in key will be used.",
     credits: "Available credits: ",
     unit: "credit",
     optionalNote:
-      "Optional — leave empty to use the built-in server key. When you add your own key, it is used for every video generation tied to your token.",
-    privacyA: "Your key is stored locally in your browser only and tied to your personal ID",
+      "Optional — leave empty to use the built-in server key. When you add your own key, it is used for every video generation tied to your token, from the website and via MCP tools.",
+    privacyA: "Your key is stored encrypted (AES-256-GCM) in the database, bound to your personal ID",
     privacyB:
-      " — it is never stored on our servers, and it is sent encrypted with every video generation request straight to kie.ai. No other user can see or use it.",
+      " — it is used automatically for video generation on the website and via MCP tools in any chat, without re-entering it. No other user can see or use it.",
   },
 
   footer: {
     tagline: "Flare Studio — image generation with",
     perVisitor: "Personal ID for every visitor",
-    keysLocal: "Your keys stay in your browser only",
+    keysLocal: "Image key stays in your browser; video key is encrypted in the database",
   },
 
   generator: {

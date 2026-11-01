@@ -52,6 +52,21 @@ model Job {
   @@index([userToken, status, createdAt])
 }
 
+// Per-user BYOK keys, stored server-side ENCRYPTED (AES-256-GCM) and bound to
+// the anonymous FLR- token. The kie.ai key saved here powers this token's video
+// generations from BOTH the website and the MCP server — so external chat
+// clients no longer need to pass kie_key on every call.
+model UserKey {
+  userToken    String    @id
+  kieApiKey    String? // AES-256-GCM ciphertext of the user's kie.ai key
+  kieCredits   Float? // last known kie.ai balance (best-effort, informational)
+  kieCheckedAt DateTime? // last successful validation time
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([updatedAt])
+}
+
 // Generated videos (grok-imagine-video-1-5-preview via kie.ai).
 // The MP4 payload is stored base64 like images; sourceUrl keeps the original
 // provider link (expires after ~14 days) for reference.

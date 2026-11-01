@@ -241,8 +241,7 @@ export function Generator() {
   };
 
   const submitVideo = async (): Promise<boolean> => {
-    const tNow = translations[useLangStore.getState().lang];
-    const kieKey = useFlareStore.getState().kieKey;
+    const tNow = () => translations[useLangStore.getState().lang];
     const trimmed = video.prompt.trim();
     const hasFrame = Boolean(
       video.startFrame || video.endFrame || video.loopFrame || video.refImage || video.keyframes.some((k) => k.url)
@@ -267,8 +266,9 @@ export function Generator() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(kieKey ? { "x-kie-key": kieKey } : {}),
       },
+      // No key header — the server uses the kie.ai key saved (encrypted) in
+      // the database for this token, falling back to its built-in key.
       body: JSON.stringify({
         userToken: useFlareStore.getState().userToken,
         prompt: trimmed,

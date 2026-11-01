@@ -65,19 +65,19 @@ export function VideoLibrary() {
   const videoList = useFlareStore((s) => s.videoList);
   const setVideoList = useFlareStore((s) => s.setVideoList);
 
-  const refresh = useCallback(
-    async (token: string) => {
-      if (!token) return;
+  const refresh = useCallback((token: string, isRetry = false) => {
+    const run = async (retry: boolean): Promise<void> => {
       try {
         const res = await fetch(`/api/videos?token=${encodeURIComponent(token)}`);
         const data = (await res.json()) as { items?: VideoItem[] };
         if (res.ok && data.items) setVideoList(data.items);
       } catch {
-        // silent — library is non-critical
+        // Transient failure (e.g. dev-server cold start) — retry once, then give up silently.
+        if (!retry) setTimeout(() => void run(true), 2_500);
       }
-    },
-    [setVideoList]
-  );
+    };
+    if (token) void run(isRetry);
+  }, [setVideoList]);
 
   useEffect(() => {
     if (userToken) void refresh(userToken);

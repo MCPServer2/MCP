@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type { GenerationItem, GenerationMode, KeyUsageInfo, VideoItem } from "@/lib/types";
 
-export type KeyStatus = "empty" | "checking" | "valid" | "invalid";
+export type KeyStatus = "empty" | "unknown" | "checking" | "valid" | "invalid";
 
 function generateUserToken(): string {
   const bytes = new Uint8Array(10);
@@ -37,9 +37,9 @@ interface FlareState {
   keyUsage: KeyUsageInfo | null;
   setKeyStatus: (status: KeyStatus, usage?: KeyUsageInfo | null) => void;
 
-  // kie.ai key for video generation (persisted locally in the browser only)
-  kieKey: string;
-  setKieKey: (key: string) => void;
+  // kie.ai key for video generation — stored ENCRYPTED in the database (per
+  // token) via /api/kie-key, so it also works from the MCP server. Only its
+  // display status lives in this store; the raw key never stays in the browser.
   kieKeyStatus: KeyStatus;
   kieCredits: number | null;
   setKieKeyStatus: (status: KeyStatus, credits?: number | null) => void;
@@ -96,9 +96,6 @@ export const useFlareStore = create<FlareState>()(
       keyUsage: null,
       setKeyStatus: (status, usage = null) => set({ keyStatus: status, keyUsage: usage }),
 
-      kieKey: "",
-      setKieKey: (key) =>
-        set({ kieKey: key.trim(), kieKeyStatus: key.trim() ? "unknown" : "empty", kieCredits: null }),
       kieKeyStatus: "empty",
       kieCredits: null,
       setKieKeyStatus: (status, credits = null) => set({ kieKeyStatus: status, kieCredits: credits }),
@@ -162,7 +159,6 @@ export const useFlareStore = create<FlareState>()(
       partialize: (state) => ({
         userToken: state.userToken,
         apiKey: state.apiKey,
-        kieKey: state.kieKey,
         mode: state.mode,
         settings: state.settings,
       }),

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { after } from "next/server";
 import { db } from "@/lib/db";
-import { KieError, MAX_KEYFRAME_S, validateKieKey } from "@/lib/kie-server";
+import { KieError, MAX_KEYFRAME_S, getUserKieKey, validateKieKey } from "@/lib/kie-server";
 import { runVideoGeneration, type VideoRunParams } from "@/lib/video-service";
 import { ASPECT_RATIOS, VIDEO_RESOLUTIONS, type VideoGenerateRequestBody } from "@/lib/types";
 
@@ -61,9 +61,12 @@ export async function POST(request: Request) {
   if (userKieKey.length > 256) {
     return NextResponse.json({ error: "مفتاح kie.ai المضاف طويل جداً." }, { status: 400 });
   }
-  if (!process.env.KIE_API_KEY?.trim() && !userKieKey) {
+  // Key priority: per-request header → key saved in the vault for this token
+  // → the server's built-in KIE_API_KEY.
+  const vaultKey = userKieKey ? null : await getUserKieKey(userToken);
+  if (!process.env.KIE_API_KEY?.trim() && !userKieKey && !vaultKey) {
     return NextResponse.json(
-      { error: "توليد الفيديو غير مُعد على الخادم — أضف KIE_API_KEY إلى متغيرات البيئة أو أضف مفتاح kie.ai الخاص بك." },
+      { error: "توليد الفيديو غير مُعد — أضف مفتاح kie.ai الخاص بك من تبويب توليد الفيديو أو اضبط KIE_API_KEY على الخادم." },
       { status: 500 }
     );
   }
