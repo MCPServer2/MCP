@@ -23,7 +23,9 @@ export function McpConnect() {
   const mounted = useHasMounted();
   const t = useT();
   const userToken = useFlareStore((s) => s.userToken);
-  const apiKey = useFlareStore((s) => s.apiKey);
+  // The CometAPI key is saved ENCRYPTED in the database (images tab) and is
+  // resolved server-side — the MCP URL needs only the gallery token.
+  const keyStatus = useFlareStore((s) => s.keyStatus);
 
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState<"name" | "url" | null>(null);
@@ -36,9 +38,8 @@ export function McpConnect() {
   const mcpUrl = useMemo(() => {
     if (!origin) return "";
     const token = userToken || "<YOUR_FLARE_TOKEN>";
-    const key = apiKey || "<YOUR_COMETAPI_KEY>";
-    return `${origin}/api/mcp?token=${encodeURIComponent(token)}&key=${encodeURIComponent(key)}`;
-  }, [origin, userToken, apiKey]);
+    return `${origin}/api/mcp?token=${encodeURIComponent(token)}`;
+  }, [origin, userToken]);
 
   const copy = async (text: string, kind: "name" | "url") => {
     if (!text) return;
@@ -130,7 +131,7 @@ export function McpConnect() {
                 {t.mcp.needToken}
               </p>
             )}
-            {mounted && !apiKey && (
+            {mounted && keyStatus === "empty" && (
               <p className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] leading-relaxed text-amber-400">
                 <ShieldAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
                 {t.mcp.needKey}

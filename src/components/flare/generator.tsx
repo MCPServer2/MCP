@@ -63,7 +63,7 @@ function sleep(ms: number) {
 export function Generator() {
   const t = useT();
   const lang = useLangStore((s) => s.lang);
-  const apiKey = useFlareStore((s) => s.apiKey);
+  const keyStatus = useFlareStore((s) => s.keyStatus);
   const mode = useFlareStore((s) => s.mode);
   const setMode = useFlareStore((s) => s.setMode);
   const settings = useFlareStore((s) => s.settings);
@@ -306,7 +306,7 @@ export function Generator() {
       return;
     }
 
-    if (!apiKey) {
+    if (keyStatus === "empty") {
       toast.error(t.generator.needKey);
       return;
     }
@@ -323,12 +323,12 @@ export function Generator() {
 
     setBusy(true);
     try {
-      // 1) Start the job — returns immediately with a jobId.
+      // 1) Start the job — returns immediately with a jobId. The CometAPI key
+      // is resolved server-side from the encrypted vault (per userToken).
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-cometapi-key": apiKey,
         },
         body: JSON.stringify({
           userToken: useFlareStore.getState().userToken,

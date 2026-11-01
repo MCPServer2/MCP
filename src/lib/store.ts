@@ -30,9 +30,10 @@ interface FlareState {
   ensureToken: () => void;
   rotateToken: () => void;
 
-  // CometAPI key (persisted locally in the browser only)
-  apiKey: string;
-  setApiKey: (key: string) => void;
+  // CometAPI key for image generation — stored ENCRYPTED in the database (per
+  // token) via /api/comet-key, so it also works from the MCP server without a
+  // &key= URL parameter. Only its display status lives in this store; the raw
+  // key never stays in the browser.
   keyStatus: KeyStatus;
   keyUsage: KeyUsageInfo | null;
   setKeyStatus: (status: KeyStatus, usage?: KeyUsageInfo | null) => void;
@@ -90,8 +91,6 @@ export const useFlareStore = create<FlareState>()(
       },
       rotateToken: () => set({ userToken: generateUserToken() }),
 
-      apiKey: "",
-      setApiKey: (key) => set({ apiKey: key.trim(), keyStatus: key.trim() ? "unknown" : "empty", keyUsage: null }),
       keyStatus: "empty",
       keyUsage: null,
       setKeyStatus: (status, usage = null) => set({ keyStatus: status, keyUsage: usage }),
@@ -158,7 +157,6 @@ export const useFlareStore = create<FlareState>()(
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         userToken: state.userToken,
-        apiKey: state.apiKey,
         mode: state.mode,
         settings: state.settings,
       }),

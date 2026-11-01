@@ -1,4 +1,6 @@
-import type { GenerationMode } from "./types";
+import { db } from "@/lib/db";
+import { decryptSecret } from "./key-vault";
+import type { GenerationMode, KeyUsageInfo } from "./types";
 
 export const COMET_BASE = "https://api.cometapi.com";
 export const FLARE_MODEL = "gpt-image-2.5-flare";
@@ -86,4 +88,86 @@ export function mimeForFormat(format: string): string {
 
 export function sanitizeMode(mode: unknown): GenerationMode {
   return mode === "sketch" ? "sketch" : "generate";
+}
+
+/* ------------------------------------------------------------------ */
+/* CometAPI key vault (same pattern as the kie.ai key)                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Reads the CometAPI key the user saved from the images tab (encrypted in the
+ * database, bound to their FLR- token). Returns null when nothing is saved or
+ * the ciphertext can no longer be decrypted.
+ */
+export async function getUserCometKey(userToken: string): Promise<string | null> {
+  try {
+    const row = await db.userKey.findUnique({
+      where: { userToken },
+      select: { cometApiKey: true },
+    });
+    if (!row?.cometApiKey) return null;
+    return decryptSecret(row.cometApiKey);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Full key resolution for a generation run: explicitly-supplied key (header /
+ * MCP argument) → key saved in the database for this token. Unlike kie.ai
+ * there is no server-wide CometAPI key — BYOK only. Returns null when no key
+ * is available; callers turn that into an actionable message.
+ */
+export async function resolveCometKeyForUser(
+  userToken: string,
+  userKey?: string | null
+): Promise<string | null> {
+  const own = userKey?.trim();
+  if (own) return own;
+  return getUserCometKey(userToken);
+}
+
+/**
+ * Free key probe via GET /api/usage/token — no credits are spent. Returns the
+ * quota payload so the vault can store an informational balance snapshot.
+ */
+export async function validateCometKey(
+  key: string
+): Promise<{ valid: boolean; unreachable?: boolean; usage?: KeyUsageInfo }> {
+  try {
+    const response = await fetch(`${COMET_BASE}/api/usage/token`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) return { valid: false };
+
+    const payload = (await response.json().catch(() => null)) as {
+      code?: boolean;
+      data?: {
+        name?: string;
+        total_granted?: number;
+        total_used?: number;
+        total_available?: number;
+        unlimited_quota?: boolean;
+        expires_at?: number;
+      };
+    } | null;
+    if (!payload || payload.code === false || !payload.data) return { valid: false };
+
+    const d = payload.data;
+    return {
+      valid: true,
+      usage: {
+        name: d.name ?? "",
+        totalGranted: d.total_granted ?? 0,
+        totalUsed: d.total_used ?? 0,
+        totalAvailable: d.total_available ?? 0,
+        unlimitedQuota: Boolean(d.unlimited_quota),
+        expiresAt: d.expires_at ?? 0,
+      },
+    };
+  } catch {
+    return { valid: false, unreachable: true };
+  }
 }

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { after } from "next/server";
 import { db } from "@/lib/db";
-import { CometError, sanitizeMode } from "@/lib/comet-server";
+import { CometError, resolveCometKeyForUser, sanitizeMode } from "@/lib/comet-server";
 import { runGeneration, type RunParams } from "@/lib/generation-service";
 import { serializeGenerationRow } from "@/lib/serialize";
 
@@ -55,17 +55,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "طلب غير صالح." }, { status: 400 });
   }
 
-  const apiKey = request.headers.get("x-cometapi-key")?.trim();
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "أضف مفتاح CometAPI أولاً من الشريط في الأعلى." },
-      { status: 400 }
-    );
-  }
-
   const userToken = body.userToken?.trim();
   if (!userToken || userToken.length < 8 || userToken.length > 80) {
     return NextResponse.json({ error: "توكن المستخدم غير صالح." }, { status: 400 });
+  }
+
+  // Key resolution: explicit per-request header → the key saved encrypted in
+  // the vault (UserKey table) for this token. The website normally sends no
+  // header at all — the vault key powers web AND MCP generations alike.
+  const headerKey = request.headers.get("x-cometapi-key")?.trim() || null;
+  const apiKey = await resolveCometKeyForUser(userToken, headerKey);
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: "أضف مفتاح CometAPI أولاً من شريط «مفتاح CometAPI الخاص بك» في الأعلى." },
+      { status: 400 }
+    );
   }
 
   const prompt = body.prompt?.trim() ?? "";

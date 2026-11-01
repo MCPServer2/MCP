@@ -32,8 +32,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
     const run = async () => {
       await Promise.all([useFlareStore.persist.rehydrate(), useLangStore.persist.rehydrate()]);
       useFlareStore.getState().ensureToken();
-      const { apiKey, keyStatus, setKeyStatus } = useFlareStore.getState();
-      if (apiKey && keyStatus === "empty") setKeyStatus("unknown");
     };
     run();
   }, []);

@@ -9,7 +9,6 @@ datasource db {
 }
 
 // Each anonymous visitor owns a unique token; all generations are bound to it.
-// The CometAPI key is NEVER persisted server-side, it only travels per-request.
 model Generation {
   id            String   @id @default(cuid())
   userToken     String
@@ -53,16 +52,20 @@ model Job {
 }
 
 // Per-user BYOK keys, stored server-side ENCRYPTED (AES-256-GCM) and bound to
-// the anonymous FLR- token. The kie.ai key saved here powers this token's video
-// generations from BOTH the website and the MCP server — so external chat
-// clients no longer need to pass kie_key on every call.
+// the anonymous FLR- token. Both the CometAPI key (images) and the kie.ai key
+// (videos) saved here power this token's generations from BOTH the website and
+// the MCP server — external chat clients never need to re-send the keys.
 model UserKey {
-  userToken    String    @id
-  kieApiKey    String? // AES-256-GCM ciphertext of the user's kie.ai key
-  kieCredits   Float? // last known kie.ai balance (best-effort, informational)
-  kieCheckedAt DateTime? // last successful validation time
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  userToken      String    @id
+  cometApiKey    String? // AES-256-GCM ciphertext of the user's CometAPI key (images)
+  cometName      String? // key name from the last successful check (informational)
+  cometAvailable Float? // last known available balance in units (informational)
+  cometUnlimited Boolean? // unlimited-quota flag from the last check
+  kieApiKey      String? // AES-256-GCM ciphertext of the user's kie.ai key (videos)
+  kieCredits     Float? // last known kie.ai balance (best-effort, informational)
+  kieCheckedAt   DateTime? // last successful validation time
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@index([updatedAt])
 }

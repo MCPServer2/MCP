@@ -111,7 +111,11 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "توكن المستخدم غير صالح." }, { status: 400 });
   }
   try {
-    await db.userKey.deleteMany({ where: { userToken: token as string } });
+    // Clear ONLY the kie.ai fields — the CometAPI key on the same row must survive.
+    await db.userKey.updateMany({
+      where: { userToken: token as string },
+      data: { kieApiKey: null, kieCredits: null, kieCheckedAt: null },
+    });
     return NextResponse.json(await statusPayload(token as string));
   } catch (error) {
     console.error("[kie-key:DELETE] error:", error);

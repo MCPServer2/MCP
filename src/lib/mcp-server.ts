@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { CometError } from "@/lib/comet-server";
+import { CometError, resolveCometKeyForUser } from "@/lib/comet-server";
 import { runGeneration, type RunParams } from "@/lib/generation-service";
 import {
   KieError,
@@ -24,9 +24,10 @@ import { serverMsg } from "@/lib/i18n";
  *   a long generation (10-60s) is in flight.
  * - Stateless: no session ids, no server-initiated streams (GET/DELETE → 405).
  *
- * Credentials come from the server URL itself (the user's personal URL built
- * on the site): token = the anonymous FLR- gallery id, key = the user's own
- * CometAPI key. They are never persisted server-side.
+ * Credentials: token = the anonymous FLR- gallery id (required in the URL).
+ * The CometAPI key is OPTIONAL in the URL (&key=…) — when omitted, the key the
+ * account owner saved ENCRYPTED in the database (images tab) is used, so the
+ * URL alone is enough for image generations from external chat clients.
  */
 
 export const MCP_SERVER_INFO = {
@@ -148,6 +149,13 @@ const TOOLS: ToolDef[] = [
             "Detailed description of the image: subject, scene, style, lighting, colors, angle. " +
             "The model can also render written text inside the image accurately.",
         },
+        api_key: {
+          type: "string",
+          description:
+            "Optional personal CometAPI key. When omitted, the key the account owner saved on the " +
+            "website (images tab) is used automatically. Pass it only to bill this one generation " +
+            "to a different CometAPI account.",
+        },
         ...imageParams,
         background: {
           type: "string",
@@ -182,6 +190,13 @@ const TOOLS: ToolDef[] = [
           type: "string",
           description:
             "URL of the source image — a publicly downloadable http(s) link or a data: URL. PNG/JPG/WEBP, max 10 MB.",
+        },
+        api_key: {
+          type: "string",
+          description:
+            "Optional personal CometAPI key. When omitted, the key the account owner saved on the " +
+            "website (images tab) is used automatically. Pass it only to bill this one generation " +
+            "to a different CometAPI account.",
         },
         ...imageParams,
       },
@@ -593,7 +608,22 @@ async function execGenerateImage(
   withReference: boolean
 ): Promise<ToolResult> {
   const token = creds.token as string;
-  const key = creds.key as string;
+
+  // Key resolution: api_key argument → &key= URL parameter → the key saved
+  // encrypted in the vault (UserKey table) for this token.
+  const argKey = typeof args.api_key === "string" && args.api_key.trim() ? args.api_key.trim() : null;
+  if (argKey && argKey.length > 256) {
+    return textResult("The provided api_key is too long.", true);
+  }
+  const apiKey = await resolveCometKeyForUser(token, argKey ?? creds.key);
+  if (!apiKey) {
+    return textResult(
+      "Image generation is not configured for this account: no CometAPI key was saved on the website " +
+        "(images tab → save your CometAPI key) and no api_key argument or &key= URL parameter was provided. " +
+        "The account owner can save their key once on the website, or pass an api_key argument.",
+      true
+    );
+  }
 
   const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
   if (!prompt) {
@@ -622,7 +652,7 @@ async function execGenerateImage(
 
   const params: RunParams = {
     jobId: job.id,
-    apiKey: key,
+    apiKey,
     userToken: token,
     mode: "generate",
     prompt,
@@ -1141,16 +1171,15 @@ const serializeVideoRowSelect = {
 /* Dispatch                                                            */
 /* ------------------------------------------------------------------ */
 
-function requireCreds(creds: McpCreds, needKey: boolean): string | null {
+function requireCreds(creds: McpCreds): string | null {
   const token = creds.token;
   if (!token || token.length < 8 || token.length > 80) {
-    return "This MCP server URL must include your personal gallery token: /api/mcp?token=FLR-XXXXX-XXXXX&key=sk-… " +
+    return "This MCP server URL must include your personal gallery token: /api/mcp?token=FLR-XXXXX-XXXXX " +
       "Rebuild the URL on the Flare Studio website (MCP section) and reconnect.";
   }
-  if (needKey && (!creds.key || creds.key.length < 8)) {
-    return "This MCP server URL must include your CometAPI key: /api/mcp?token=FLR-…&key=sk-… " +
-      "Rebuild the URL on the Flare Studio website (MCP section) and reconnect.";
-  }
+  // The CometAPI key is NOT required in the URL: the key saved in the website
+  // vault (images tab) is used automatically. execGenerateImage fails with an
+  // actionable message when neither the URL nor the vault provides one.
   return null;
 }
 
@@ -1180,10 +1209,11 @@ async function dispatchRequest(
           "poll a running generation, get_image / list_recent_images for the gallery. Videos: the Grok Imagine " +
           "model (grok-imagine-video-1-5-preview) — use generate_video for text-to-video, image animation, " +
           "Start/End frames, Loop frames and keyframes; poll with check_video_job, and use get_video / " +
-          "list_recent_videos for the video library. Video billing uses the kie.ai key saved on the website " +
-          "for this account automatically — never ask the user for a key, just call generate_video. Image " +
-          "results include ready-to-use markdown image links (embed them as ![image](url) in your reply); " +
-          "video results include direct playable URLs (paste them in your reply and embed as markdown links).",
+          "list_recent_videos for the video library. Billing uses the keys the account owner saved on the " +
+          "website automatically (CometAPI for images, kie.ai for videos) — never ask the user for a key, " +
+          "just call the tools. Image results include ready-to-use markdown image links (embed them as " +
+          "![image](url) in your reply); video results include direct playable URLs (paste them in your " +
+          "reply and embed as markdown links).",
       });
     }
 
@@ -1209,8 +1239,7 @@ async function dispatchRequest(
         return errorResponse(id, -32602, `Unknown tool: ${name || "(missing)"}`);
       }
 
-      const needKey = name === "generate_image" || name === "edit_image";
-      const credsError = requireCreds(creds, needKey);
+      const credsError = requireCreds(creds);
       if (credsError) return resultResponse(id, { ...textResult(credsError, true), isError: true });
 
       try {
