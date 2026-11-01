@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import type { GenerationItem, GenerationMode, KeyUsageInfo } from "@/lib/types";
+import type { GenerationItem, GenerationMode, KeyUsageInfo, VideoItem } from "@/lib/types";
 
 export type KeyStatus = "empty" | "checking" | "valid" | "invalid";
 
@@ -61,6 +61,13 @@ interface FlareState {
   removeItem: (id: string) => void;
   clearGalleryLocal: () => void;
 
+  // Video library (server state)
+  latestVideos: VideoItem[];
+  videoList: VideoItem[];
+  prependVideoResults: (items: VideoItem[]) => void;
+  setVideoList: (items: VideoItem[]) => void;
+  removeVideoItem: (id: string) => void;
+
   // Viewer
   viewerId: string | null;
   openViewer: (id: string) => void;
@@ -116,6 +123,20 @@ export const useFlareStore = create<FlareState>()(
           gallery: state.gallery.filter((i) => i.id !== id),
         })),
       clearGalleryLocal: () => set({ gallery: [], latest: [] }),
+
+      latestVideos: [],
+      videoList: [],
+      prependVideoResults: (items) =>
+        set((state) => ({
+          latestVideos: [...items, ...state.latestVideos].slice(0, 8),
+          videoList: [...items, ...state.videoList].slice(0, 60),
+        })),
+      setVideoList: (items) => set({ videoList: items }),
+      removeVideoItem: (id) =>
+        set((state) => ({
+          latestVideos: state.latestVideos.filter((v) => v.id !== id),
+          videoList: state.videoList.filter((v) => v.id !== id),
+        })),
 
       viewerId: null,
       openViewer: (id) => set({ viewerId: id }),

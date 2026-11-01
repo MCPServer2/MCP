@@ -162,6 +162,10 @@ export function McpConnect() {
               <li><code className="rounded bg-muted px-1 py-0.5 font-mono">check_job</code> — {t.mcp.toolCheck}</li>
               <li><code className="rounded bg-muted px-1 py-0.5 font-mono">get_image</code> — {t.mcp.toolGet}</li>
               <li><code className="rounded bg-muted px-1 py-0.5 font-mono">list_recent_images</code> — {t.mcp.toolList}</li>
+              <li><code className="rounded bg-muted px-1 py-0.5 font-mono">generate_video</code> — {t.mcp.toolVideoGenerate}</li>
+              <li><code className="rounded bg-muted px-1 py-0.5 font-mono">check_video_job</code> — {t.mcp.toolVideoCheck}</li>
+              <li><code className="rounded bg-muted px-1 py-0.5 font-mono">get_video</code> — {t.mcp.toolVideoGet}</li>
+              <li><code className="rounded bg-muted px-1 py-0.5 font-mono">list_recent_videos</code> — {t.mcp.toolVideoList}</li>
             </ul>
           </div>
 

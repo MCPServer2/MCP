@@ -1,4 +1,4 @@
-export type GenerationMode = "generate" | "sketch";
+export type GenerationMode = "generate" | "sketch" | "video";
 
 export interface GenerateRequestBody {
   userToken: string;
@@ -73,3 +73,70 @@ export const QUALITIES = ["auto", "low", "medium", "high"] as const;
 export const OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 
 export const BACKGROUNDS = ["auto", "transparent", "opaque"] as const;
+
+/* ------------------------------------------------------------------ */
+/* Video (grok-imagine-video-1-5-preview via kie.ai)                   */
+/* ------------------------------------------------------------------ */
+
+export interface VideoKeyframeInput {
+  /** data URL or public http(s) image URL */
+  url: string;
+  /** timestamp in seconds, > 0 and < duration */
+  timestamp: number;
+}
+
+export interface VideoGenerateRequestBody {
+  userToken: string;
+  prompt: string;
+  aspectRatio: string;
+  resolution: string;
+  duration: number;
+  audio: boolean;
+  /** data URL / http URL of the first frame (Start Frame) */
+  startFrame?: string | null;
+  /** data URL / http URL of the last frame (End Frame) */
+  endFrame?: string | null;
+  /** loop image used as both first and last frame */
+  loopFrame?: string | null;
+  /** image to animate (image_urls) */
+  referenceImage?: string | null;
+  /** up to 4 mid-video keyframes */
+  keyframes?: VideoKeyframeInput[];
+}
+
+export interface VideoItem {
+  id: string;
+  prompt: string;
+  model: string;
+  aspectRatio: string;
+  resolution: string;
+  duration: number;
+  audio: boolean;
+  usedStartFrame: boolean;
+  usedEndFrame: boolean;
+  usedKeyframes: number;
+  usedLoop: boolean;
+  usedReference: boolean;
+  mimeType: string;
+  credits: number | null;
+  createdAt: string;
+}
+
+/** POST /api/video response — the video runs async in the background. */
+export interface VideoStartResponse {
+  jobId?: string;
+  error?: string;
+}
+
+/** GET /api/video/[jobId] response. */
+export interface VideoJobStatusResponse {
+  status: "pending" | "processing" | "done" | "error";
+  items?: VideoItem[];
+  error?: string;
+}
+
+export const ASPECT_RATIOS = ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
+export const VIDEO_RESOLUTIONS = ["480p", "720p", "1080p"] as const;
+export const VIDEO_DURATION_MIN = 1;
+export const VIDEO_DURATION_MAX = 15;
+export const VIDEO_KEYFRAMES_MAX = 4;

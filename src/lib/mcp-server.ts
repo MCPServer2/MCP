@@ -1,6 +1,16 @@
 import { db } from "@/lib/db";
 import { CometError } from "@/lib/comet-server";
 import { runGeneration, type RunParams } from "@/lib/generation-service";
+import {
+  KieError,
+  MAX_KEYFRAME_S,
+} from "@/lib/kie-server";
+import {
+  recoverVideoJob,
+  runVideoGeneration,
+  serializeVideoRow,
+  type VideoRunParams,
+} from "@/lib/video-service";
 import { serverMsg } from "@/lib/i18n";
 
 /**
@@ -21,7 +31,7 @@ import { serverMsg } from "@/lib/i18n";
 export const MCP_SERVER_INFO = {
   name: "flare-image-generator",
   title: "Flare Image Generator",
-  version: "1.0.0",
+  version: "1.1.0",
 } as const;
 
 const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -235,6 +245,144 @@ const TOOLS: ToolDef[] = [
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
+  {
+    name: "generate_video",
+    title: "Generate a video with Grok Imagine",
+    description:
+      "Generate a short MP4 video (with audio) using the grok-imagine-video-1-5-preview model via kie.ai. " +
+      "Supports pure text-to-video, animating an input image (image_url), a Start Frame and/or End Frame " +
+      "(start_frame_url / end_frame_url), a Loop frame (loop_url — used as both first and last frame, " +
+      "cannot be combined with start/end frames) and up to 4 mid-video keyframes " +
+      "(keyframes: [{url, timestamp_s}]). Videos typically finish in 40-120 seconds; if the tool replies " +
+      "that the job is still running, poll it with check_video_job. The finished video is saved to the " +
+      "user's private library; the result text contains its direct playable URL — share it in the chat " +
+      "and embed it as a plain markdown link so the user can open/download it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description:
+            "Describe the video: scene, action, camera movement, mood. Spoken dialogue written in the " +
+            "prompt is rendered as audio. Max 4096 characters. With image_url you can reference it as @image1. " +
+            "Optional when at least one frame is provided.",
+        },
+        image_url: {
+          type: "string",
+          description:
+            "Optional image to animate (image-to-video) — public http(s) URL or data: URL. PNG/JPG/WEBP, max 20 MB. " +
+            "Not supported at 1080p resolution.",
+        },
+        start_frame_url: {
+          type: "string",
+          description: "Optional Start Frame — the video opens from this image (public http(s) URL or data: URL).",
+        },
+        end_frame_url: {
+          type: "string",
+          description: "Optional End Frame — the video ends on this image (public http(s) URL or data: URL).",
+        },
+        loop_url: {
+          type: "string",
+          description:
+            "Optional loop image used as BOTH the first and last frame (seamless loop). " +
+            "Cannot be sent together with a different start/end frame.",
+        },
+        keyframes: {
+          type: "array",
+          maxItems: 4,
+          description:
+            "Optional mid-video keyframes (up to 4). Each item: {url: string, timestamp_s: number} where " +
+            "timestamp_s is > 0 and < duration, and any two keyframes are at least 1/3 second apart.",
+          items: {
+            type: "object",
+            properties: {
+              url: { type: "string", description: "Keyframe image — public http(s) URL or data: URL." },
+              timestamp_s: { type: "number", description: "When this frame appears, in seconds (> 0 and < duration)." },
+            },
+            required: ["url", "timestamp_s"],
+            additionalProperties: false,
+          },
+        },
+        aspect_ratio: {
+          type: "string",
+          enum: ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+          description: "Video aspect ratio. Default: auto.",
+        },
+        resolution: {
+          type: "string",
+          enum: ["480p", "720p", "1080p"],
+          description: "Video resolution (1080p disables image_url animation). Default: 480p (fastest).",
+        },
+        duration: {
+          type: "integer",
+          minimum: 1,
+          maximum: 15,
+          description: "Video duration in seconds (1-15). Default: 8.",
+        },
+        enable_audio: {
+          type: "boolean",
+          description: "Generate audio (dialogue/sound). Default: true.",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "check_video_job",
+    title: "Check video job status",
+    description:
+      "Check the status of a previously started video generation and fetch the finished MP4 when ready. " +
+      "Use this if generate_video replied that the job is still running.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        job_id: { type: "string", description: "The jobId returned by generate_video." },
+      },
+      required: ["job_id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "get_video",
+    title: "Fetch a stored video",
+    description:
+      "Fetch one video from the user's private library by its video id and return its direct playable URL " +
+      "(and its source provider URL when still valid). Use it to re-share a previously generated video in the chat.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        video_id: {
+          type: "string",
+          description: "The video id, as returned by generate_video, check_video_job or list_recent_videos.",
+        },
+      },
+      required: ["video_id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "list_recent_videos",
+    title: "List recent videos",
+    description:
+      "List the most recent videos generated by this account, with their video ids, direct playable URLs " +
+      "and the prompts used. Combine with get_video to re-share any of them in the chat.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 20,
+          description: "How many videos to return (1-20). Default: 6.",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -293,6 +441,7 @@ function truncate(text: string, max: number): string {
 /** Maps any thrown error to a user-friendly English message for the tool result. */
 function mapToolError(error: unknown): string {
   if (error instanceof ToolError) return error.message;
+  if (error instanceof KieError) return error.message;
   if (error instanceof CometError) {
     const en = serverMsg(error.message, "en");
     return en === error.message ? `${en} (HTTP ${error.status})` : en;
@@ -625,6 +774,345 @@ async function execGetImage(
 }
 
 /* ------------------------------------------------------------------ */
+/* Video tools (grok-imagine-video-1-5-preview via kie.ai)             */
+/* ------------------------------------------------------------------ */
+
+/** Public URL for one stored video (token in the query keeps the library private). */
+function videoUrl(id: string, token: string, baseUrl: string): string {
+  return `${baseUrl}/api/video-file/${id}?token=${encodeURIComponent(token)}`;
+}
+
+/** Builds the success payload for a finished video job: playable URL + guidance. */
+async function buildFinishedVideoResult(
+  jobId: string,
+  token: string,
+  baseUrl: string
+): Promise<ToolResult> {
+  const rows = await db.video.findMany({
+    where: { jobId, userToken: token },
+    orderBy: { createdAt: "asc" },
+  });
+  if (rows.length === 0) {
+    return textResult("The video job finished but no video was stored. Please try generating again.", true);
+  }
+
+  const lines = rows
+    .map((r, i) => {
+      const url = videoUrl(r.id, token, baseUrl);
+      const meta = `${r.resolution} ${r.aspectRatio} ${r.duration}s${r.audio ? " with audio" : " muted"}`;
+      return (
+        `Video ${i + 1} — id: ${r.id} (${meta})\n` +
+        `Play/download: ${url}\n` +
+        `[Open video ${i + 1}](${url})`
+      );
+    })
+    .join("\n");
+
+  const first = rows[0];
+  const text =
+    `🎬 Generated ${rows.length} video${rows.length > 1 ? "s" : ""} with Grok Imagine (grok-imagine-video-1-5-preview).\n` +
+    `Prompt: "${truncate(first.prompt, 400)}"\n` +
+    `\n${lines}\n\n` +
+    "IMPORTANT — how to share: paste the Play/download URL(s) directly in your reply (many chat clients " +
+    "render them as an inline video player), and also embed each as a markdown link " +
+    "(syntax: [Open video](url)) so the user can always open or download the MP4. " +
+    "The video is also saved in the user's private video library on the Flare Studio website.";
+
+  return { content: [{ type: "text", text }] };
+}
+
+interface ParsedVideoArgs {
+  prompt: string;
+  imageUrl: string | null;
+  startFrame: string | null;
+  endFrame: string | null;
+  loopFrame: string | null;
+  keyframes: { url: string; timestamp: number }[];
+  aspectRatio: string;
+  resolution: string;
+  duration: number;
+  audio: boolean;
+}
+
+/** Validates generate_video arguments; returns an error string or the parsed args. */
+function parseVideoArgs(args: Record<string, unknown>): { error?: string; parsed?: ParsedVideoArgs } {
+  const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+  const imageUrl = typeof args.image_url === "string" && args.image_url.trim() ? args.image_url.trim() : null;
+  const startFrame =
+    typeof args.start_frame_url === "string" && args.start_frame_url.trim() ? args.start_frame_url.trim() : null;
+  const endFrame =
+    typeof args.end_frame_url === "string" && args.end_frame_url.trim() ? args.end_frame_url.trim() : null;
+  const loopFrame =
+    typeof args.loop_url === "string" && args.loop_url.trim() ? args.loop_url.trim() : null;
+
+  if (!prompt && !imageUrl && !startFrame && !endFrame && !loopFrame) {
+    return { error: "Provide a prompt, or at least one frame/image URL to animate." };
+  }
+  if (prompt.length > 4096) {
+    return { error: "The prompt exceeds the 4096 character limit." };
+  }
+  if (loopFrame && (startFrame || endFrame)) {
+    return { error: "loop_url cannot be combined with start_frame_url/end_frame_url — pick one style." };
+  }
+
+  const duration = clampInt(args.duration, 1, 15, 8);
+  const keyframes: { url: string; timestamp: number }[] = [];
+  if (Array.isArray(args.keyframes)) {
+    for (const raw of args.keyframes.slice(0, 4)) {
+      if (!raw || typeof raw !== "object") continue;
+      const obj = raw as Record<string, unknown>;
+      const url = typeof obj.url === "string" ? obj.url.trim() : "";
+      const ts = Number(obj.timestamp_s);
+      if (!url) return { error: "Every keyframe needs a url." };
+      if (!Number.isFinite(ts) || ts <= 0 || ts >= duration) {
+        return { error: `Each keyframe timestamp_s must be > 0 and < duration (${duration}s).` };
+      }
+      keyframes.push({ url, timestamp: Math.min(ts, MAX_KEYFRAME_S) });
+    }
+    if (duration <= 1 && keyframes.length > 0) {
+      return { error: "Keyframes need a duration longer than 1 second." };
+    }
+  }
+
+  const resolution = pickEnum(args.resolution, ["480p", "720p", "1080p"], "480p");
+  if (resolution === "1080p" && imageUrl) {
+    return { error: "1080p does not support animating an image (image_url) — use 480p or 720p." };
+  }
+
+  return {
+    parsed: {
+      prompt,
+      imageUrl,
+      startFrame,
+      endFrame,
+      loopFrame,
+      keyframes,
+      aspectRatio: pickEnum(
+        args.aspect_ratio,
+        ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+        "auto"
+      ),
+      resolution,
+      duration,
+      audio: args.enable_audio === undefined ? true : Boolean(args.enable_audio),
+    },
+  };
+}
+
+async function execGenerateVideo(
+  args: Record<string, unknown>,
+  creds: McpCreds,
+  baseUrl: string
+): Promise<ToolResult> {
+  const token = creds.token as string;
+
+  const { error, parsed } = parseVideoArgs(args);
+  if (error || !parsed) {
+    return textResult(error ?? "Invalid arguments.", true);
+  }
+
+  if (!process.env.KIE_API_KEY?.trim()) {
+    return textResult(
+      "Video generation is not configured on the server yet (missing KIE_API_KEY environment variable).",
+      true
+    );
+  }
+
+  const job = await db.job.create({
+    data: { userToken: token, mode: "video", prompt: parsed.prompt, status: "pending" },
+    select: { id: true },
+  });
+
+  const params: VideoRunParams = {
+    jobId: job.id,
+    userToken: token,
+    prompt: parsed.prompt,
+    aspectRatio: parsed.aspectRatio,
+    resolution: parsed.resolution,
+    duration: parsed.duration,
+    audio: parsed.audio,
+    startFrame: parsed.startFrame,
+    endFrame: parsed.endFrame,
+    loopFrame: parsed.loopFrame,
+    referenceImage: parsed.imageUrl,
+    keyframes: parsed.keyframes,
+  };
+
+  // Videos usually finish in 40-120s — wait (bounded) while the SSE stream
+  // keeps the connection alive; afterwards the client can poll check_video_job.
+  const generation = runVideoGeneration(params).then(
+    () => ({ settled: true as const, error: null as unknown }),
+    (e: unknown) => ({ settled: true as const, error: e })
+  );
+  const outcome = await Promise.race([
+    generation,
+    sleep(TOOL_WAIT_MS).then(() => ({ settled: false as const })),
+  ]);
+
+  if (!outcome.settled) {
+    return textResult(
+      `⏳ The video is still generating (jobId: ${job.id}). Grok Imagine videos usually take 40-120 seconds — ` +
+        "call the check_video_job tool with this jobId shortly to fetch the finished MP4."
+    );
+  }
+  if (outcome.error) {
+    await db.job
+      .update({
+        where: { id: job.id },
+        data: {
+          status: "error",
+          error:
+            outcome.error instanceof KieError
+              ? outcome.error.message
+              : outcome.error instanceof Error && outcome.error.name === "AbortError"
+                ? "انتهت مهلة الاتصال بـ kie.ai. جرّب مرة أخرى."
+                : "حدث خطأ غير متوقع أثناء توليد الفيديو.",
+        },
+      })
+      .catch(() => undefined);
+    return textResult(mapToolError(outcome.error), true);
+  }
+
+  return buildFinishedVideoResult(job.id, token, baseUrl);
+}
+
+async function execCheckVideoJob(
+  args: Record<string, unknown>,
+  creds: McpCreds,
+  baseUrl: string
+): Promise<ToolResult> {
+  const token = creds.token as string;
+  const jobId = typeof args.job_id === "string" ? args.job_id.trim() : "";
+  if (!jobId) return textResult("The 'job_id' parameter is required.", true);
+
+  const job = await db.job.findUnique({ where: { id: jobId } });
+  if (!job || job.userToken !== token) {
+    return textResult("Job not found (or it belongs to another token).", true);
+  }
+  if (job.mode !== "video") {
+    return textResult("This jobId belongs to an image job — use the check_job tool instead.", true);
+  }
+
+  // Recovery pass — finishes the job from its stored kie.ai task if the
+  // background worker died.
+  if (job.status === "pending" || job.status === "processing") {
+    await recoverVideoJob(job.id).catch(() => undefined);
+  }
+
+  const current = await db.job.findUnique({ where: { id: jobId } });
+  if (current?.status === "pending" || current?.status === "processing") {
+    const elapsed = Math.round((Date.now() - new Date(current.createdAt).getTime()) / 1000);
+    return textResult(
+      `⏳ Still generating (${elapsed}s elapsed). Grok Imagine videos usually take 40-120 seconds — ` +
+        "call check_video_job again shortly."
+    );
+  }
+  if (current?.status === "error") {
+    return textResult(serverMsg(current.error, "en") || "The video generation failed. Please try again.", true);
+  }
+  return buildFinishedVideoResult(jobId, token, baseUrl);
+}
+
+/** Returns one stored video with its playable URL. */
+async function execGetVideo(
+  args: Record<string, unknown>,
+  creds: McpCreds,
+  baseUrl: string
+): Promise<ToolResult> {
+  const token = creds.token as string;
+  const videoId = typeof args.video_id === "string" ? args.video_id.trim() : "";
+  if (!videoId) {
+    return textResult(
+      "The 'video_id' parameter is required — use an id from generate_video, check_video_job or list_recent_videos.",
+      true
+    );
+  }
+
+  const row = await db.video.findFirst({ where: { id: videoId, userToken: token } });
+  if (!row) {
+    return textResult("Video not found (or it belongs to another token).", true);
+  }
+
+  const url = videoUrl(row.id, token, baseUrl);
+  const meta = `${row.resolution} ${row.aspectRatio} ${row.duration}s${row.audio ? " with audio" : " muted"}`;
+  const text =
+    `🎬 Video ${row.id} (${meta})\n` +
+    `Prompt: "${truncate(row.prompt, 300)}"\n` +
+    `Generated: ${new Date(row.createdAt).toISOString()}\n\n` +
+    `Play/download: ${url}\n` +
+    `[Open video](${url})\n\n` +
+    "Share the URL directly in your reply (many chat clients render it as an inline video player) " +
+    "and embed it as a markdown link ([Open video](url)) so the user can always open or download it.";
+
+  return { content: [{ type: "text", text }] };
+}
+
+async function execListRecentVideos(
+  args: Record<string, unknown>,
+  creds: McpCreds,
+  baseUrl: string
+): Promise<ToolResult> {
+  const token = creds.token as string;
+  const limit = clampInt(args.limit, 1, 20, 6);
+
+  const rows = await db.video.findMany({
+    where: { userToken: token },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: { ...serializeVideoRowSelect },
+  });
+
+  if (rows.length === 0) {
+    return textResult("No videos yet — call generate_video first.");
+  }
+
+  const lines = rows
+    .map((r, i) => {
+      const url = videoUrl(r.id, token, baseUrl);
+      const flags = [
+        r.usedStartFrame ? "start-frame" : null,
+        r.usedEndFrame ? "end-frame" : null,
+        r.usedLoop ? "loop" : null,
+        r.usedKeyframes > 0 ? `${r.usedKeyframes} keyframes` : null,
+        r.usedReference ? "animated-image" : null,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      return (
+        `${i + 1}. id: ${r.id} [${r.resolution} ${r.aspectRatio} ${r.duration}s${flags ? `, ${flags}` : ""}] ` +
+        `"${truncate(r.prompt, 120)}" — ${new Date(r.createdAt).toISOString()}\n` +
+        `   Play/download: ${url}\n   [Open video ${i + 1}](${url})`
+      );
+    })
+    .join("\n");
+
+  return textResult(
+    `🎬 Your ${rows.length} most recent video${rows.length > 1 ? "s" : ""}:\n${lines}\n\n` +
+      "To share one of these videos in the chat: paste its Play/download URL directly, " +
+      "or call get_video with the video id."
+  );
+}
+
+/** Shared select for list_recent_videos (kept near its only consumer). */
+const serializeVideoRowSelect = {
+  id: true,
+  prompt: true,
+  model: true,
+  aspectRatio: true,
+  resolution: true,
+  duration: true,
+  audio: true,
+  usedStartFrame: true,
+  usedEndFrame: true,
+  usedKeyframes: true,
+  usedLoop: true,
+  usedReference: true,
+  mimeType: true,
+  credits: true,
+  createdAt: true,
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* Dispatch                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -662,12 +1150,14 @@ async function dispatchRequest(
         capabilities: { tools: { listChanged: false } },
         serverInfo: { ...MCP_SERVER_INFO },
         instructions:
-          "Flare Image Generator creates images with the GPT Image 2.5 Flare model: text-to-image, " +
-          "reference-image edits and sketch-to-image. Use generate_image for text prompts, edit_image when " +
-          "the user supplies a reference or sketch image URL, check_job to poll a running generation, " +
-          "get_image to fetch a stored image by id, and list_recent_images to browse the gallery. " +
-          "Every result includes ready-to-use markdown image links — always embed them (syntax: " +
-          "![image](url)) in your reply so the images render inline in the chat.",
+          "Flare Studio creates images AND videos. Images: the GPT Image 2.5 Flare model — use generate_image " +
+          "for text prompts, edit_image when the user supplies a reference or sketch image URL, check_job to " +
+          "poll a running generation, get_image / list_recent_images for the gallery. Videos: the Grok Imagine " +
+          "model (grok-imagine-video-1-5-preview) — use generate_video for text-to-video, image animation, " +
+          "Start/End frames, Loop frames and keyframes; poll with check_video_job, and use get_video / " +
+          "list_recent_videos for the video library. Image results include ready-to-use markdown image links " +
+          "(embed them as ![image](url) in your reply); video results include direct playable URLs (paste them " +
+          "in your reply and embed as markdown links).",
       });
     }
 
@@ -703,6 +1193,10 @@ async function dispatchRequest(
         else if (name === "edit_image") result = await execGenerateImage(args, creds, baseUrl, true);
         else if (name === "check_job") result = await execCheckJob(args, creds, baseUrl);
         else if (name === "get_image") result = await execGetImage(args, creds, baseUrl);
+        else if (name === "generate_video") result = await execGenerateVideo(args, creds, baseUrl);
+        else if (name === "check_video_job") result = await execCheckVideoJob(args, creds, baseUrl);
+        else if (name === "get_video") result = await execGetVideo(args, creds, baseUrl);
+        else if (name === "list_recent_videos") result = await execListRecentVideos(args, creds, baseUrl);
         else result = await execListRecent(args, creds, baseUrl);
         return resultResponse(id, { ...result });
       } catch (error) {

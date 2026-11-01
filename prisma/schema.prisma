@@ -35,15 +35,46 @@ model Generation {
 
 // Async generation job: the API returns the jobId immediately, the model call
 // runs in the background (after), and the client polls the job status.
+// mode: "generate" | "sketch" (images) | "video" (kie.ai grok video)
+// status: pending | processing | done | error
 model Job {
   id        String   @id @default(cuid())
   userToken String
-  status    String   @default("pending") // pending | done | error
-  mode      String // "generate" | "sketch"
+  status    String   @default("pending") // pending | processing | done | error
+  mode      String // "generate" | "sketch" | "video"
   prompt    String
+  taskId    String? // upstream provider task id (kie.ai) for video jobs
   error     String? // Arabic error message when status = error
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userToken, status, createdAt])
+}
+
+// Generated videos (grok-imagine-video-1-5-preview via kie.ai).
+// The MP4 payload is stored base64 like images; sourceUrl keeps the original
+// provider link (expires after ~14 days) for reference.
+model Video {
+  id             String   @id @default(cuid())
+  userToken      String
+  jobId          String?
+  taskId         String? // kie.ai task id
+  prompt         String
+  model          String   @default("grok-imagine-video-1-5-preview")
+  aspectRatio    String   @default("16:9")
+  resolution     String   @default("480p")
+  duration       Int      @default(8)
+  audio          Boolean  @default(true)
+  usedStartFrame Boolean  @default(false)
+  usedEndFrame   Boolean  @default(false)
+  usedKeyframes  Int      @default(0)
+  usedLoop       Boolean  @default(false)
+  usedReference  Boolean  @default(false)
+  sourceUrl      String?
+  mimeType       String   @default("video/mp4")
+  data           String // base64 video payload
+  credits        Float?
+  createdAt      DateTime @default(now())
+
+  @@index([userToken, createdAt])
 }

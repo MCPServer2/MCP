@@ -6,6 +6,7 @@ import { Generator } from "@/components/flare/generator";
 import { McpConnect } from "@/components/flare/mcp-connect";
 import { Results } from "@/components/flare/results";
 import { Gallery } from "@/components/flare/gallery";
+import { VideoResults, VideoLibrary } from "@/components/flare/video-results";
 import { Lightbox } from "@/components/flare/lightbox";
 import { SiteFooter } from "@/components/flare/footer";
 
@@ -23,7 +24,9 @@ export default function Home() {
           </div>
           <div className="space-y-8">
             <Results />
+            <VideoResults />
             <Gallery />
+            <VideoLibrary />
             <McpConnect />
           </div>
         </div>

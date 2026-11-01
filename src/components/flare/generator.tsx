@@ -2,13 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  Wand2,
-  PenTool,
   Loader2,
   Sparkles,
   Info,
   Pencil,
   UploadCloud,
+  Clapperboard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -40,15 +39,21 @@ import type {
   GenerationItem,
   GenerationMode,
   JobStatusResponse,
+  VideoJobStatusResponse,
+  VideoStartResponse,
 } from "@/lib/types";
 import { BACKGROUNDS, OUTPUT_FORMATS, QUALITIES, SIZES } from "@/lib/types";
 import { SketchUpload } from "./sketch-upload";
 import { SketchDrawer } from "./sketch-drawer";
 import { RefUpload } from "./ref-upload";
+import { VideoForm, type VideoFormValue } from "./video-form";
 
 const POLL_INTERVAL_MS = 2000;
 const POLL_MAX_WAIT_MS = 300_000; // upstream timeout is 280s
 const POLL_MAX_NET_FAILURES = 5;
+const VIDEO_POLL_INTERVAL_MS = 3000;
+const VIDEO_POLL_MAX_WAIT_MS = 720_000; // videos can take several minutes
+const VIDEO_POLL_MAX_NET_FAILURES = 8;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -66,6 +71,7 @@ export function Generator() {
   const setSketchImage = useFlareStore((s) => s.setSketchImage);
   const refImage = useFlareStore((s) => s.refImage);
   const prependResults = useFlareStore((s) => s.prependResults);
+  const prependVideoResults = useFlareStore((s) => s.prependVideoResults);
   // Rehydrated asynchronously (skipHydration) — the resume effect waits for it.
   const userToken = useFlareStore((s) => s.userToken);
 
@@ -74,6 +80,16 @@ export function Generator() {
   const [elapsed, setElapsed] = useState(0);
   // Sketch source: draw directly on the canvas, or upload an existing image.
   const [sketchSource, setSketchSource] = useState<"draw" | "upload">("draw");
+  // Video tab state (frames are optional — pure text-to-video is valid).
+  const [video, setVideo] = useState<VideoFormValue>({
+    prompt: "",
+    settings: { aspectRatio: "16:9", resolution: "480p", duration: 8, audio: true },
+    startFrame: null,
+    endFrame: null,
+    loopFrame: null,
+    refImage: null,
+    keyframes: [],
+  });
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const busyRef = useRef(false);
   const cancelledRef = useRef(false);
@@ -166,7 +182,125 @@ export function Generator() {
     return false;
   };
 
+  /**
+   * Polls the async video job until the MP4 is stored server-side. The kie.ai
+   * call runs in the background, so a dropped connection never loses a video —
+   * the job keeps running and is even resumed after a page reload.
+   */
+  const pollVideoJob = async (jobId: string): Promise<boolean> => {
+    const token = useFlareStore.getState().userToken;
+    const tNow = () => translations[useLangStore.getState().lang];
+    const deadline = Date.now() + VIDEO_POLL_MAX_WAIT_MS;
+    let netFailures = 0;
+
+    while (Date.now() < deadline) {
+      if (cancelledRef.current) return false;
+      await sleep(VIDEO_POLL_INTERVAL_MS);
+      if (cancelledRef.current) return false;
+
+      let data: VideoJobStatusResponse | null = null;
+      try {
+        const res = await fetch(`/api/video/${jobId}?token=${encodeURIComponent(token)}`);
+        if (res.status === 404) {
+          toast.error(tNow().video.jobLost);
+          return false;
+        }
+        data = (await res.json()) as VideoJobStatusResponse;
+        netFailures = 0;
+      } catch {
+        netFailures++;
+        if (netFailures >= VIDEO_POLL_MAX_NET_FAILURES) {
+          toast.error(tNow().video.pollDropped);
+          return false;
+        }
+        continue;
+      }
+
+      if (data.status === "done" && data.items?.length) {
+        prependVideoResults(data.items);
+        toast.success(
+          data.items.length > 1
+            ? fmt(tNow().video.successMany, { n: data.items.length })
+            : tNow().video.successOne
+        );
+        setVideo((v) => ({ ...v, prompt: "" }));
+        return true;
+      }
+
+      if (data.status === "error") {
+        toast.error(
+          serverMsg(data.error, useLangStore.getState().lang) || tNow().video.generateFailed
+        );
+        return false;
+      }
+    }
+
+    toast.error(tNow().video.timeout);
+    return false;
+  };
+
+  const submitVideo = async (): Promise<boolean> => {
+    const tNow = translations[useLangStore.getState().lang];
+    const trimmed = video.prompt.trim();
+    const hasFrame = Boolean(
+      video.startFrame || video.endFrame || video.loopFrame || video.refImage || video.keyframes.some((k) => k.url)
+    );
+    if (!trimmed && !hasFrame) {
+      toast.error(tNow().video.needPromptOrFrame);
+      return false;
+    }
+    if (video.loopFrame && (video.startFrame || video.endFrame)) {
+      toast.error(tNow().video.loopConflict);
+      return false;
+    }
+    const badKeyframe = video.keyframes.find(
+      (k) => k.url && (!Number.isFinite(k.timestamp) || k.timestamp <= 0 || k.timestamp >= video.settings.duration)
+    );
+    if (badKeyframe) {
+      toast.error(tNow().video.keyframeTimeInvalid);
+      return false;
+    }
+
+    const res = await fetch("/api/video", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userToken: useFlareStore.getState().userToken,
+        prompt: trimmed,
+        aspectRatio: video.settings.aspectRatio,
+        resolution: video.settings.resolution,
+        duration: video.settings.duration,
+        audio: video.settings.audio,
+        startFrame: video.startFrame,
+        endFrame: video.endFrame,
+        loopFrame: video.loopFrame,
+        referenceImage: video.refImage,
+        keyframes: video.keyframes.filter((k) => k.url).map((k) => ({ url: k.url, timestamp: k.timestamp })),
+      }),
+    });
+
+    const start = (await res.json()) as VideoStartResponse;
+    if (!res.ok || !start.jobId) {
+      toast.error(serverMsg(start.error, useLangStore.getState().lang) || tNow().video.startFailed);
+      return false;
+    }
+    return pollVideoJob(start.jobId);
+  };
+
   const submit = async () => {
+    if (mode === "video") {
+      if (busyRef.current) return;
+      setBusy(true);
+      try {
+        await submitVideo();
+      } catch {
+        toast.error(t.video.network);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
     if (!apiKey) {
       toast.error(t.generator.needKey);
       return;
@@ -239,13 +373,31 @@ export function Generator() {
           toast.info(translations[useLangStore.getState().lang].generator.resumeFound);
           setBusy(true);
           try {
-            await pollJob(data.pending.id, useFlareStore.getState().mode);
+            await pollJob(data.pending.id, useFlareStore.getState().mode === "video" ? "generate" : useFlareStore.getState().mode);
           } finally {
             setBusy(false);
           }
         }
       } catch {
         // ignore — the gallery refresh button is the fallback
+      }
+
+      // Resume a pending video job the same way.
+      try {
+        const res = await fetch(`/api/video?token=${encodeURIComponent(userToken)}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { pending?: { id: string } | null };
+        if (data.pending?.id && !busyRef.current && !cancelledRef.current) {
+          toast.info(translations[useLangStore.getState().lang].video.resumeFound);
+          setBusy(true);
+          try {
+            await pollVideoJob(data.pending.id);
+          } finally {
+            setBusy(false);
+          }
+        }
+      } catch {
+        // ignore — the video library refresh button is the fallback
       }
     })();
   }, [userToken]);
@@ -254,14 +406,15 @@ export function Generator() {
     <section aria-label={t.generator.panelAria} className="rounded-2xl border bg-card text-card-foreground shadow-sm">
       <Tabs value={mode} onValueChange={switchMode} className="gap-0">
         <div className="border-b p-4 sm:p-5">
-          <TabsList className="grid h-11 w-full grid-cols-2 bg-muted/60">
-            <TabsTrigger value="generate" className="gap-1.5 data-[state=active]:bg-background">
-              <Wand2 className="size-4" aria-hidden="true" />
+          <TabsList className="grid h-11 w-full grid-cols-3 bg-muted/60">
+            <TabsTrigger value="generate" className="text-[13px] data-[state=active]:bg-background">
               {t.generator.tabGenerate}
             </TabsTrigger>
-            <TabsTrigger value="sketch" className="gap-1.5 data-[state=active]:bg-background">
-              <PenTool className="size-4" aria-hidden="true" />
+            <TabsTrigger value="sketch" className="text-[13px] data-[state=active]:bg-background">
               {t.generator.tabSketch}
+            </TabsTrigger>
+            <TabsTrigger value="video" className="text-[13px] data-[state=active]:bg-background">
+              {t.video.tab}
             </TabsTrigger>
           </TabsList>
         </div>
@@ -414,6 +567,13 @@ export function Generator() {
               />
             </div>
           </TabsContent>
+
+          <TabsContent value="video" className="mt-0 space-y-4">
+            <VideoForm
+              value={video}
+              onChange={(patch) => setVideo((v) => ({ ...v, ...patch }))}
+            />
+          </TabsContent>
         </div>
       </Tabs>
 
@@ -426,24 +586,30 @@ export function Generator() {
         <Button
           onClick={submit}
           disabled={busy}
-          className="h-12 w-full gap-2 bg-gradient-to-l from-amber-500 via-orange-500 to-orange-600 text-base font-bold text-white shadow-lg shadow-orange-500/25 hover:from-amber-400 hover:via-orange-400 hover:to-orange-500"
+          className={`h-12 w-full gap-2 text-base font-bold text-white shadow-lg ${
+            mode === "video"
+              ? "bg-gradient-to-l from-teal-500 via-emerald-500 to-teal-600 shadow-teal-500/25 hover:from-teal-400 hover:via-emerald-400 hover:to-teal-500"
+              : "bg-gradient-to-l from-amber-500 via-orange-500 to-orange-600 shadow-orange-500/25 hover:from-amber-400 hover:via-orange-400 hover:to-orange-500"
+          }`}
         >
           {busy ? (
             <>
               <Loader2 className="size-5 animate-spin" />
-              {fmt(t.generator.generating, { n: elapsed })}
+              {mode === "video"
+                ? fmt(t.video.generating, { n: elapsed })
+                : fmt(t.generator.generating, { n: elapsed })}
             </>
           ) : (
             <>
-              <Sparkles className="size-5" />
-              {mode === "generate" ? t.generator.btnGenerate : t.generator.btnSketch}
+              {mode === "video" ? <Clapperboard className="size-5" /> : <Sparkles className="size-5" />}
+              {mode === "video" ? t.video.btn : mode === "generate" ? t.generator.btnGenerate : t.generator.btnSketch}
             </>
           )}
         </Button>
 
         <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
           <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-          {t.generator.infoNote}
+          {mode === "video" ? t.video.infoNote : t.generator.infoNote}
         </p>
       </div>
     </section>

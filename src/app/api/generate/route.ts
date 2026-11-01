@@ -20,13 +20,19 @@ export async function GET(request: Request) {
   }
 
   // Fail stale pending jobs so the client never waits on a dead one.
+  // (Video jobs have their own longer lifecycle in /api/video — excluded here.)
   await db.job.updateMany({
-    where: { userToken: token, status: "pending", updatedAt: { lt: new Date(Date.now() - STALE_PENDING_MS) } },
+    where: {
+      userToken: token,
+      status: "pending",
+      mode: { not: "video" },
+      updatedAt: { lt: new Date(Date.now() - STALE_PENDING_MS) },
+    },
     data: { status: "error", error: "توقفت عملية التوليد قبل اكتمالها. جرّب مرة أخرى." },
   });
 
   const pending = await db.job.findFirst({
-    where: { userToken: token, status: "pending" },
+    where: { userToken: token, status: "pending", mode: { not: "video" } },
     orderBy: { createdAt: "desc" },
     select: { id: true, mode: true, createdAt: true },
   });
