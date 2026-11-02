@@ -160,12 +160,35 @@ async function storeFinishedVideo(
 const POSTER_MAX_W = 768;
 
 /**
+ * Resolves the ffmpeg binary path. Prefers the bundled static binary
+ * (@ffmpeg-installer/ffmpeg — required on Vercel serverless where no system
+ * ffmpeg exists), falling back to the system "ffmpeg" (sandbox/dev).
+ * Cached after the first call; a failed import is not fatal because posters
+ * are best-effort.
+ */
+let ffmpegPathPromise: Promise<string | null> | null = null;
+function resolveFfmpegPath(): Promise<string | null> {
+  ffmpegPathPromise ??= (async () => {
+    try {
+      const mod = (await import("@ffmpeg-installer/ffmpeg")) as { default?: { path?: string }; path?: string };
+      const installer = mod.default ?? mod;
+      if (typeof installer?.path === "string" && installer.path) return installer.path;
+    } catch {
+      // Package missing (e.g. slim dev install) → system ffmpeg below.
+    }
+    return null;
+  })();
+  return ffmpegPathPromise;
+}
+
+/**
  * Extracts a representative JPEG frame from an MP4 buffer with ffmpeg.
  * Prefers a frame at ~1s (avoids an all-black opener); falls back to the
  * first frame. Returns null on any failure — posters are best-effort and
  * must never break video delivery.
  */
 async function extractPosterFrame(buf: Buffer): Promise<{ base64: string; mime: string } | null> {
+  const ffmpegBin = (await resolveFfmpegPath()) ?? "ffmpeg";
   const dir = await mkdtemp(path.join(tmpdir(), "flare-poster-"));
   const src = path.join(dir, "input.mp4");
   const out = path.join(dir, "poster.jpg");
@@ -174,7 +197,7 @@ async function extractPosterFrame(buf: Buffer): Promise<{ base64: string; mime: 
     const attempt = (atSec: number) =>
       new Promise<boolean>((resolve) => {
         const proc = spawn(
-          "ffmpeg",
+          ffmpegBin,
           [
             "-hide_banner", "-loglevel", "error",
             "-ss", atSec.toFixed(1),

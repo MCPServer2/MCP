@@ -589,10 +589,12 @@ async function buildFinishedJobResult(
 
   const content: ToolResult["content"] = [];
   let budget = INLINE_BUDGET_CHARS;
+  let attached = 0;
   for (const r of rows) {
     if (r.data.length <= budget) {
       content.push({ type: "image", data: r.data, mimeType: r.mimeType || "image/png" });
       budget -= r.data.length;
+      attached += 1;
     }
   }
 
@@ -602,6 +604,7 @@ async function buildFinishedJobResult(
       const view = imageViewerUrl(r.id, token, baseUrl);
       return (
         `Image ${i + 1} — id: ${r.id} (${r.size} ${r.outputFormat})\n` +
+        `Markdown line to embed in your reply (renders the image INLINE in the chat):\n` +
         `![Image ${i + 1}](${url})\n` +
         `Direct URL: ${url}\n` +
         `Viewer page: ${view}`
@@ -614,11 +617,13 @@ async function buildFinishedJobResult(
     `✅ Generated ${rows.length} image${rows.length > 1 ? "s" : ""} with GPT Image 2.5 Flare.\n` +
     `Prompt: "${truncate(first.prompt, 400)}"\n` +
     (first.revisedPrompt ? `Revised prompt: "${truncate(first.revisedPrompt, 400)}"\n` : "") +
-    `\n${links}\n` +
-    "IMPORTANT — how to display: if the image content blocks are visible to you, show them; " +
-    "otherwise embed each markdown image link above (syntax: ![Image N](url)) directly in your reply " +
-    "so the images render inline in the chat. Also share the direct URL(s) or the viewer page link " +
-    "so the user can open or download them. " +
+    `\n${links}\n\n` +
+    (attached > 0
+      ? `The actual image data ${attached > 1 ? `for the first ${attached} image${attached > 2 ? "s" : ""}` : ""} is also attached above as image content block${attached > 1 ? "s" : ""} — display ${attached > 1 ? "them" : "it"} directly if your client renders image blocks. `
+      : "") +
+    "IMPORTANT — how to display: your reply MUST contain the markdown image line(s) above, copied exactly " +
+    "(syntax: ![Image N](url)), so the image(s) render INLINE in the chat. Then paste the direct URL and/or " +
+    "the viewer page link on their own lines so the user can open or download the full-size files. " +
     "The images are also saved in the user's private gallery on the Flare Studio website.";
 
   content.push({ type: "text", text });
@@ -830,12 +835,14 @@ async function execGetImage(
     `🖼️ Image ${row.id} (${row.size} ${row.outputFormat}${row.usedReference ? ", with reference" : ""})\n` +
     `Prompt: "${truncate(row.prompt, 300)}"\n` +
     `Generated: ${new Date(row.createdAt).toISOString()}\n\n` +
+    `Markdown line to embed in your reply (renders the image INLINE in the chat):\n` +
     `![image](${url})\n` +
     `Direct URL: ${url}\n` +
     `Viewer page: ${view}\n\n` +
-    "Display: the image content block above shows the image directly; otherwise embed the markdown " +
-    "image link (syntax: ![image](url)) in your reply so it renders inline in the chat. Also share the " +
-    "direct URL or viewer page so the user can open or download it.";
+    "The image content block above carries the actual image data — display it directly if your client " +
+    "renders image blocks. Your reply MUST also contain the markdown image line above, copied exactly " +
+    "(syntax: ![image](url)), so the image renders inline in every chat client. Then share the direct " +
+    "URL or viewer page so the user can open or download it.";
 
   return {
     content: [
@@ -876,6 +883,7 @@ async function buildFinishedVideoResult(
 
   const content: ToolResult["content"] = [];
   let budget = INLINE_BUDGET_CHARS;
+  let posterBlocks = 0;
 
   const lines: string[] = [];
   for (let i = 0; i < rows.length; i++) {
@@ -891,9 +899,11 @@ async function buildFinishedVideoResult(
     if (posterData && posterData.base64.length <= budget) {
       content.push({ type: "image", data: posterData.base64, mimeType: posterData.mime });
       budget -= posterData.base64.length;
+      posterBlocks += 1;
     }
     lines.push(
       `Video ${i + 1} — id: ${r.id} (${meta})\n` +
+        `Markdown line to embed in your reply (renders the video's preview frame INLINE in the chat):\n` +
         `![Video ${i + 1} preview](${poster})\n` +
         `Play/download (MP4): ${url}\n` +
         `Viewer page: ${view}`
@@ -905,12 +915,14 @@ async function buildFinishedVideoResult(
     `🎬 Generated ${rows.length} video${rows.length > 1 ? "s" : ""} with Grok Imagine (grok-imagine-video-1-5-preview).\n` +
     `Prompt: "${truncate(first.prompt, 400)}"\n` +
     `\n${lines.join("\n")}\n\n` +
-    "IMPORTANT — how to share: the video's visual PREVIEW is attached above as an image and is also " +
-    "available at the ![Video N preview](poster-url) markdown link — embed that markdown image in your " +
-    "reply so the video shows up VISUALLY in the chat. Then paste the Play/download (MP4) URL directly " +
-    "(many clients render it as an inline player) and the Viewer page link so the user can always watch " +
-    "or download the full video. The video is also saved in the user's private video library on the " +
-    "Flare Studio website.";
+    (posterBlocks > 0
+      ? `The preview frame${posterBlocks > 1 ? "s" : ""} ${posterBlocks > 1 ? "are" : "is"} also attached above as image content block${posterBlocks > 1 ? "s" : ""} — display ${posterBlocks > 1 ? "them" : "it"} directly if your client renders image blocks. `
+      : "") +
+    "IMPORTANT — how to share so the video shows up VISUALLY in the chat: your reply MUST contain the " +
+    "markdown preview line(s) above, copied exactly (syntax: ![Video N preview](poster-url)) — chat clients " +
+    "render that as an inline image of the video. Then paste the Play/download (MP4) URL and the Viewer " +
+    "page link on their own lines so the user can watch or download the full video. The video is also " +
+    "saved in the user's private video library on the Flare Studio website.";
 
   content.push({ type: "text", text });
   return { content };
@@ -1157,12 +1169,14 @@ async function execGetVideo(
     `🎬 Video ${row.id} (${meta})\n` +
     `Prompt: "${truncate(row.prompt, 300)}"\n` +
     `Generated: ${new Date(row.createdAt).toISOString()}\n\n` +
+    `Markdown line to embed in your reply (renders the video's preview frame INLINE in the chat):\n` +
     `![Video preview](${poster})\n` +
     `Play/download (MP4): ${url}\n` +
     `Viewer page: ${view}\n\n` +
-    "IMPORTANT — how to share: embed the markdown preview image above in your reply so the video shows " +
-    "up VISUALLY in the chat, then paste the MP4 URL and/or the viewer page link so the user can watch " +
-    "or download it.";
+    "IMPORTANT — how to share: the preview frame is attached above as an image content block — display it " +
+    "directly if your client renders image blocks. Your reply MUST also contain the markdown preview line " +
+    "above, copied exactly (syntax: ![Video preview](poster-url)) so the video shows up VISUALLY in the " +
+    "chat, then paste the MP4 URL and/or the viewer page link so the user can watch or download it.";
   content.push({ type: "text", text });
 
   return { content };
@@ -1204,7 +1218,7 @@ async function execListRecentVideos(
       return (
         `${i + 1}. id: ${r.id} [${r.resolution} ${r.aspectRatio} ${r.duration}s${flags ? `, ${flags}` : ""}] ` +
         `"${truncate(r.prompt, 120)}" — ${new Date(r.createdAt).toISOString()}\n` +
-        `   ![Video ${i + 1} preview](${poster})\n` +
+        `   Markdown preview line: ![Video ${i + 1} preview](${poster})\n` +
         `   Play/download (MP4): ${url}\n   Viewer page: ${view}`
       );
     })
@@ -1212,8 +1226,9 @@ async function execListRecentVideos(
 
   return textResult(
     `🎬 Your ${rows.length} most recent video${rows.length > 1 ? "s" : ""}:\n${lines}\n\n` +
-      "To share one of these videos in the chat: embed its markdown preview image (renders visually), " +
-      "paste its Play/download MP4 URL, or call get_video with the video id."
+      "To share one of these videos in the chat: copy its Markdown preview line into your reply exactly as " +
+      "written (renders the preview frame inline), paste its Play/download MP4 URL, or call get_video with " +
+      "the video id to also receive the preview as an image content block."
   );
 }
 
