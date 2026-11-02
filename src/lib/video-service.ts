@@ -278,9 +278,12 @@ export async function runVideoGeneration(p: VideoRunParams): Promise<void> {
   });
   if (claimed.count === 0) return;
 
-  // Key priority: per-request key → key saved in the vault for this token →
-  // server's built-in KIE_API_KEY (resolveKieKey throws when none exists).
-  const kieKey = p.kieKey || (await getUserKieKey(p.userToken));
+  // Key priority: key saved in the vault for this token ALWAYS wins (adding a
+  // new key on the website deletes the old one and the new one applies right
+  // away — stale keys re-sent by old clients can never shadow it) → per-request
+  // key as a fallback when nothing is saved → server's built-in KIE_API_KEY
+  // (resolveKieKey throws when none exists).
+  const kieKey = (await getUserKieKey(p.userToken)) || p.kieKey;
 
   // 2) Make sure every frame is a URL the video model can download.
   const [startFrame, endFrame, loopFrame, referenceImage] = await Promise.all([

@@ -57,22 +57,27 @@ export async function POST(request: Request) {
   }
 
   // Optional personal kie.ai key (BYOK — like the CometAPI image flow).
-  const userKieKey = request.headers.get("x-kie-key")?.trim() ?? "";
-  if (userKieKey.length > 256) {
+  const headerKey = request.headers.get("x-kie-key")?.trim() ?? "";
+  if (headerKey.length > 256) {
     return NextResponse.json({ error: "مفتاح kie.ai المضاف طويل جداً." }, { status: 400 });
   }
-  // Key priority: per-request header → key saved in the vault for this token
-  // → the server's built-in KIE_API_KEY.
-  const vaultKey = userKieKey ? null : await getUserKieKey(userToken);
-  if (!process.env.KIE_API_KEY?.trim() && !userKieKey && !vaultKey) {
+  // Key priority: the key saved in the vault for this token ALWAYS wins —
+  // adding a new key on the video tab deletes the old one and the new one
+  // applies immediately, so a stale key re-sent by an old client (old header /
+  // learned MCP argument) can never shadow it. The header key is only a
+  // fallback for accounts with nothing saved; the server's built-in
+  // KIE_API_KEY comes last.
+  const vaultKey = await getUserKieKey(userToken);
+  if (!process.env.KIE_API_KEY?.trim() && !vaultKey && !headerKey) {
     return NextResponse.json(
       { error: "توليد الفيديو غير مُعد — أضف مفتاح kie.ai الخاص بك من تبويب توليد الفيديو أو اضبط KIE_API_KEY على الخادم." },
       { status: 500 }
     );
   }
-  // Reject an obviously-bad personal key up front (free probe — no credits spent).
-  if (userKieKey) {
-    const probe = await validateKieKey(userKieKey);
+  // Reject an obviously-bad fallback key up front (free probe — no credits
+  // spent). A vault key was already validated when it was saved.
+  if (!vaultKey && headerKey) {
+    const probe = await validateKieKey(headerKey);
     if (!probe.valid && !probe.unreachable) {
       return NextResponse.json(
         { error: "مفتاح kie.ai الذي أضفته غير صالح — تحقق منه ثم أعد المحاولة." },
@@ -171,7 +176,7 @@ export async function POST(request: Request) {
       url: String(k.url),
       timestamp: Math.min(Math.max(Number(k.timestamp), 0.1), MAX_KEYFRAME_S),
     })),
-    kieKey: userKieKey || null,
+    kieKey: vaultKey ? null : headerKey || null,
   };
 
   after(async () => {

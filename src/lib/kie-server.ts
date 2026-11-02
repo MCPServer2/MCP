@@ -6,12 +6,16 @@
  * - GET  /api/v1/jobs/recordInfo?taskId=… → { code, data: { state, resultJson, failMsg } }
  *
  * Keys (BYOK, like the CometAPI image flow), in priority order:
- *  1. Per-request key via the x-kie-key header / MCP kie_key argument.
- *  2. The key the user saved from the video tab — encrypted in the UserKey
+ *  1. The key the user saved from the video tab — encrypted in the UserKey
  *     table and bound to their FLR- token (getUserKieKey). This makes the key
  *     work from the MCP server too, without re-sending it on every call.
+ *     The SAVED KEY ALWAYS WINS: adding a new key on the website replaces the
+ *     old one everywhere (site + MCP), so a stale key re-sent by an old client
+ *     (x-kie-key header / MCP kie_key argument) can never shadow it.
+ *  2. Per-request key via the x-kie-key header / MCP kie_key argument — only
+ *     a fallback for accounts with nothing saved in the vault.
  *  3. The server's built-in KIE_API_KEY environment variable.
- * A per-request key is additionally stored on the Job row (kieKey) so the
+ * The effective key is additionally stored on the Job row (kieKey) so the
  * recovery path can query the correct kie.ai account after a worker restart.
  */
 
@@ -86,17 +90,19 @@ export async function getUserKieKey(userToken: string): Promise<string | null> {
 }
 
 /**
- * Full key resolution for a generation run: explicitly-supplied key (header /
- * MCP argument) → key saved in the database for this token → server env key.
+ * Full key resolution for a generation run: the key saved in the vault for
+ * this token ALWAYS wins (adding a new key on the website deletes the old one
+ * and the new one applies immediately) → explicitly-supplied key (header /
+ * MCP argument) as a fallback when nothing is saved → server env key.
  */
 export async function resolveKieKeyForUser(
   userToken: string,
   userKey?: string | null
 ): Promise<string> {
-  const own = userKey?.trim();
-  if (own) return own;
   const saved = await getUserKieKey(userToken);
   if (saved) return saved;
+  const own = userKey?.trim();
+  if (own) return own;
   return resolveKieKey();
 }
 

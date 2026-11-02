@@ -59,7 +59,7 @@ const ar = {
     badgeNone: "لم يُضف مفتاح بعد",
     previewLabel: "المفتاح المحفوظ:",
     vaultNote:
-      "مطلوب لتوليد الصور — عند حفظه يُستخدم تلقائياً في كل عمليات التوليد الخاصة بمعرّفك، من الموقع ومن أدوات MCP في أي محادثة دون إعادة إدخاله.",
+      "مطلوب لتوليد الصور — عند حفظه يُستخدم تلقائياً في كل عمليات التوليد الخاصة بمعرّفك، من الموقع ومن أدوات MCP في أي محادثة دون إعادة إدخاله. إضافة مفتاح جديد تحذف المحفوظ سابقاً ويُصبح الجديد هو المستخدم فوراً.",
     keyName: "اسم المفتاح: ",
     balance: "الرصيد المتاح: ",
     used: "المستخدم: ",
@@ -99,7 +99,7 @@ const ar = {
     credits: "الرصيد المتاح: ",
     unit: "كريدت",
     optionalNote:
-      "اختياري — اتركه فارغاً لاستخدام المفتاح المدمج على الخادم. عند إضافة مفتاحك يُستخدم في كل عمليات توليد الفيديو الخاصة بمعرّفك، من الموقع وعبر أدوات MCP.",
+      "عند إضافة مفتاح جديد يُحذف المفتاح المحفوظ سابقاً ويُستخدم الجديد فوراً في كل عمليات توليد الفيديو الخاصة بمعرّفك، من الموقع وعبر أدوات MCP — حتى لو كان مفتاح قديم ما زال مُرسلاً من عميل خارجي. اتركه فارغاً لاستخدام المفتاح المدمج على الخادم.",
     privacyA: "مفتاحك يُحفظ مشفّراً (AES-256-GCM) في قاعدة البيانات ومرتبطاً بمعرّفك الخاص",
     privacyB:
       "— يُستخدم تلقائياً في توليد الفيديو من الموقع ومن أدوات MCP في أي محادثة دون إعادة إدخاله، ولا يمكن لأي مستخدم آخر رؤيته أو استخدامه.",
@@ -459,7 +459,7 @@ const en: Dict = {
     badgeNone: "No key added yet",
     previewLabel: "Saved key:",
     vaultNote:
-      "Required for image generation — once saved, it is used automatically for every generation tied to your token, from the website and via MCP tools in any chat, without re-entering it.",
+      "Required for image generation — once saved, it is used automatically for every generation tied to your token, from the website and via MCP tools in any chat, without re-entering it. Adding a new key deletes the previously saved one and the new key applies immediately.",
     keyName: "Key name: ",
     balance: "Available balance: ",
     used: "Used: ",
@@ -499,7 +499,7 @@ const en: Dict = {
     credits: "Available credits: ",
     unit: "credit",
     optionalNote:
-      "Optional — leave empty to use the built-in server key. When you add your own key, it is used for every video generation tied to your token, from the website and via MCP tools.",
+      "Adding a new key deletes the previously saved one — the new key applies immediately to every video generation tied to your token, on the website and via MCP tools, even if an old key is still being sent by an external client. Leave empty to use the built-in server key.",
     privacyA: "Your key is stored encrypted (AES-256-GCM) in the database, bound to your personal ID",
     privacyB:
       " — it is used automatically for video generation on the website and via MCP tools in any chat, without re-entering it. No other user can see or use it.",

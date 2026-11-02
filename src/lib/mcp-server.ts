@@ -277,7 +277,9 @@ const TOOLS: ToolDef[] = [
       "(start_frame_url / end_frame_url), a Loop frame (loop_url — used as both first and last frame, " +
       "cannot be combined with start/end frames) and up to 4 mid-video keyframes " +
       "(keyframes: [{url, timestamp_s}]). Billing uses the kie.ai key the account owner saved on the " +
-      "website automatically — pass kie_key only to override it for this one call. Videos typically " +
+      "website — the newest saved key ALWAYS applies (adding a new key on the website deletes the old " +
+      "one and it takes effect everywhere, even if an older kie_key is still being sent). The optional " +
+      "kie_key argument is only a fallback when no key is saved on the website. Videos typically " +
       "finish in 40-120 seconds; if the tool replies that the job is still running, poll it with " +
       "check_video_job. The finished video is saved to the user's private library. The result includes " +
       "an INLINE PREVIEW IMAGE (a frame of the video) as an image content block and a markdown image " +
@@ -353,9 +355,10 @@ const TOOLS: ToolDef[] = [
         kie_key: {
           type: "string",
           description:
-            "Optional personal kie.ai API key. When omitted, the key the account owner saved on the " +
-            "website (video tab) is used automatically, falling back to the server's built-in key. " +
-            "Pass it only to bill this one generation to a different kie.ai account.",
+            "Optional personal kie.ai API key — ONLY a fallback when no key is saved on the website. " +
+            "The key the account owner saved on the website (video tab) always wins: the newest saved " +
+            "key replaces any older one and applies automatically, so a previously sent kie_key is " +
+            "ignored once a key is saved.",
         },
       },
       additionalProperties: false,
@@ -1036,19 +1039,21 @@ async function execGenerateVideo(
     return textResult(error ?? "Invalid arguments.", true);
   }
 
-  if (!process.env.KIE_API_KEY?.trim() && !parsed.kieKey) {
-    // No env key and no per-call key — try the key saved on the website for
-    // this account (encrypted in the vault, resolved inside the pipeline too,
-    // but checked here to fail fast with an actionable message).
-    const savedKey = await getUserKieKey(token);
-    if (!savedKey) {
-      return textResult(
-        "Video generation is not configured for this account: no kie.ai key was saved on the website " +
-          "(video tab → save your kie.ai key) and the server has no built-in KIE_API_KEY. The account " +
-          "owner can save their key once on the website, or you can pass a kie_key argument.",
-        true
-      );
-    }
+  // Key resolution (mirrors the pipeline): the key saved on the website for
+  // this account ALWAYS wins — adding a new key there deletes the old one and
+  // the new one applies even if a stale kie_key argument is still being sent.
+  // The kie_key argument is only a fallback when nothing is saved; the server's
+  // built-in KIE_API_KEY comes last. Checked here to fail fast with an
+  // actionable message.
+  const savedKieKey = await getUserKieKey(token);
+  if (!process.env.KIE_API_KEY?.trim() && !savedKieKey && !parsed.kieKey) {
+    return textResult(
+      "Video generation is not configured for this account: no kie.ai key was saved on the website " +
+        "(video tab → save your kie.ai key) and the server has no built-in KIE_API_KEY. The account " +
+        "owner can save their key once on the website (the newest saved key always replaces the old " +
+        "one), or you can pass a kie_key argument as a fallback.",
+      true
+    );
   }
 
   const job = await db.job.create({
