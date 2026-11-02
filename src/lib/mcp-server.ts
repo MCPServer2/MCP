@@ -140,9 +140,10 @@ const TOOLS: ToolDef[] = [
     title: "Generate image from text",
     description:
       "Generate one or more images from a text prompt using the GPT Image 2.5 Flare model. " +
-      "Returns the image(s) directly plus ready-to-use markdown image links, and saves them to the user's private gallery. " +
-      "Typical generation time is 10-60 seconds. To display the result in the chat, embed each returned " +
-      "markdown image link (syntax: ![image](url)) in your reply.",
+      "Returns the image(s) directly plus ready-to-use markdown image lines, and saves them to the user's private gallery. " +
+      "Typical generation time is 10-60 seconds. To display the result in the chat, START your reply with " +
+      "the returned markdown image line(s), copied exactly (syntax: ![image](url)) — never replace them " +
+      "with a bare URL, which renders as a text link instead of a picture.",
     inputSchema: {
       type: "object",
       properties: {
@@ -179,7 +180,9 @@ const TOOLS: ToolDef[] = [
       "Generate an image guided by a reference image: sketch-to-image rendering, style transfer, " +
       "or editing an existing picture. Provide a publicly downloadable image URL (http/https) or a data: URL. " +
       "The reference's composition guides the result while the prompt describes the desired output. " +
-      "To display the result in the chat, embed each returned markdown image link (syntax: ![image](url)) in your reply.",
+      "To display the result in the chat, START your reply with the returned markdown image line, copied " +
+      "exactly (syntax: ![image](url)) — never replace it with a bare URL, which renders as a text link " +
+      "instead of a picture.",
     inputSchema: {
       type: "object",
       properties: {
@@ -228,9 +231,10 @@ const TOOLS: ToolDef[] = [
     name: "get_image",
     title: "Fetch a stored gallery image",
     description:
-      "Fetch one image from the user's private gallery by its image id and return it as displayable " +
-      "image content plus a public markdown image URL. Use it to show a previously generated image " +
-      "(or a gallery item from list_recent_images) inline in the chat.",
+      "Fetch one image from the user's private gallery by its image id and return it as an image content " +
+      "block plus a ready-to-use markdown image line. Use it to show a previously generated image " +
+      "(or a gallery item from list_recent_images) inline in the chat: START your reply with the " +
+      "markdown image line, copied exactly — never a bare URL.",
     inputSchema: {
       type: "object",
       properties: {
@@ -277,8 +281,9 @@ const TOOLS: ToolDef[] = [
       "finish in 40-120 seconds; if the tool replies that the job is still running, poll it with " +
       "check_video_job. The finished video is saved to the user's private library. The result includes " +
       "an INLINE PREVIEW IMAGE (a frame of the video) as an image content block and a markdown image " +
-      "link, plus the direct playable MP4 URL and a browser viewer page — embed the preview image in " +
-      "your reply so the video shows up VISUALLY in the chat, then share the MP4/viewer links.",
+      "line, plus the direct playable MP4 URL and a browser viewer page — START your reply with the " +
+      "markdown preview line copied exactly (renders the frame as a picture in the chat), then give " +
+      "the MP4 link on its own line below it. Never replace the markdown line with a bare URL.",
     inputSchema: {
       type: "object",
       properties: {
@@ -549,24 +554,32 @@ function textResult(text: string, isError = false): ToolResult {
   return { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) };
 }
 
-/** Public URL for one stored image (token in the query keeps galleries private). */
+/**
+ * Public URL for one stored image, with the token in the PATH.
+ *
+ * Path tokens (instead of ?token= query strings) are the canonical shape for
+ * every URL the MCP results embed in markdown: some chat clients run markdown
+ * image URLs through sanitizers that strip query strings, which would turn
+ * the picture into a broken image / bare link. The media routes accept both
+ * shapes; this one always renders.
+ */
 function imageUrl(id: string, token: string, baseUrl: string): string {
-  return `${baseUrl}/api/image/${id}?token=${encodeURIComponent(token)}`;
+  return `${baseUrl}/api/image/${id}/t/${encodeURIComponent(token)}`;
 }
 
 /** Browser-friendly HTML viewer page for one image (always works as a share link). */
 function imageViewerUrl(id: string, token: string, baseUrl: string): string {
-  return `${baseUrl}/api/view/image/${id}?token=${encodeURIComponent(token)}`;
+  return `${baseUrl}/api/view/image/${id}/t/${encodeURIComponent(token)}`;
 }
 
 /** JPEG preview frame of a stored video (extracted with ffmpeg, cached in DB). */
 function videoPosterUrl(id: string, token: string, baseUrl: string): string {
-  return `${baseUrl}/api/video-poster/${id}?token=${encodeURIComponent(token)}`;
+  return `${baseUrl}/api/video-poster/${id}/t/${encodeURIComponent(token)}`;
 }
 
 /** Browser-friendly HTML viewer page for one video (plays inline, OG tags). */
 function videoViewerUrl(id: string, token: string, baseUrl: string): string {
-  return `${baseUrl}/api/view/video/${id}?token=${encodeURIComponent(token)}`;
+  return `${baseUrl}/api/view/video/${id}/t/${encodeURIComponent(token)}`;
 }
 
 /**
@@ -602,28 +615,25 @@ async function buildFinishedJobResult(
     .map((r, i) => {
       const url = imageUrl(r.id, token, baseUrl);
       const view = imageViewerUrl(r.id, token, baseUrl);
-      return (
-        `Image ${i + 1} — id: ${r.id} (${r.size} ${r.outputFormat})\n` +
-        `Markdown line to embed in your reply (renders the image INLINE in the chat):\n` +
-        `![Image ${i + 1}](${url})\n` +
-        `Direct URL: ${url}\n` +
-        `Viewer page: ${view}`
-      );
+      return `![Image ${i + 1}](${url})\n(viewer / download page: ${view})`;
     })
-    .join("\n");
+    .join("\n\n");
 
   const first = rows[0];
   const text =
     `✅ Generated ${rows.length} image${rows.length > 1 ? "s" : ""} with GPT Image 2.5 Flare.\n` +
     `Prompt: "${truncate(first.prompt, 400)}"\n` +
     (first.revisedPrompt ? `Revised prompt: "${truncate(first.revisedPrompt, 400)}"\n` : "") +
-    `\n${links}\n\n` +
+    `\n=== EMBED THIS EXACT MARKDOWN AT THE TOP OF YOUR REPLY ===\n` +
+    `${links}\n` +
+    `=== END MARKDOWN ===\n\n` +
     (attached > 0
       ? `The actual image data ${attached > 1 ? `for the first ${attached} image${attached > 2 ? "s" : ""}` : ""} is also attached above as image content block${attached > 1 ? "s" : ""} — display ${attached > 1 ? "them" : "it"} directly if your client renders image blocks. `
       : "") +
-    "IMPORTANT — how to display: your reply MUST contain the markdown image line(s) above, copied exactly " +
-    "(syntax: ![Image N](url)), so the image(s) render INLINE in the chat. Then paste the direct URL and/or " +
-    "the viewer page link on their own lines so the user can open or download the full-size files. " +
+    "How to display: copy the markdown line(s) between the markers character-for-character to the TOP of " +
+    "your reply. The leading ! makes the chat client render the image itself INSIDE the conversation. " +
+    "NEVER replace it with a bare URL — a bare URL shows as a text link only, not as a picture. After the " +
+    "markdown you may add the viewer page link so the user can open or download the full-size file. " +
     "The images are also saved in the user's private gallery on the Flare Studio website.";
 
   content.push({ type: "text", text });
@@ -797,15 +807,16 @@ async function execListRecent(
       return (
         `${i + 1}. id: ${r.id} [${r.mode}${r.usedReference ? " + reference" : ""}, ${r.size} ${r.outputFormat}] ` +
         `"${truncate(r.prompt, 120)}" — ${new Date(r.createdAt).toISOString()}\n` +
-        `   ![Image ${i + 1}](${url})\n   Direct URL: ${url}\n   Viewer page: ${view}`
+        `   ![Image ${i + 1}](${url})\n   viewer: ${view}`
       );
     })
     .join("\n");
 
   return textResult(
     `🖼️ Your ${rows.length} most recent image${rows.length > 1 ? "s" : ""}:\n${lines}\n\n` +
-      "To display one of these images in the chat: embed its markdown image link (syntax: ![image](url)) " +
-      "in your reply, or call get_image with the image id to fetch the actual image content."
+      "To display one of these images in the chat: copy its ![Image N](url) markdown line into your reply " +
+      "exactly as written — the leading ! renders the image inline as a picture (a bare URL shows as a text " +
+      "link only). Or call get_image with the image id to also receive the actual image content block."
   );
 }
 
@@ -835,14 +846,14 @@ async function execGetImage(
     `🖼️ Image ${row.id} (${row.size} ${row.outputFormat}${row.usedReference ? ", with reference" : ""})\n` +
     `Prompt: "${truncate(row.prompt, 300)}"\n` +
     `Generated: ${new Date(row.createdAt).toISOString()}\n\n` +
-    `Markdown line to embed in your reply (renders the image INLINE in the chat):\n` +
+    `=== EMBED THIS EXACT MARKDOWN AT THE TOP OF YOUR REPLY ===\n` +
     `![image](${url})\n` +
-    `Direct URL: ${url}\n` +
-    `Viewer page: ${view}\n\n` +
+    `(viewer / download page: ${view})\n` +
+    `=== END MARKDOWN ===\n\n` +
     "The image content block above carries the actual image data — display it directly if your client " +
-    "renders image blocks. Your reply MUST also contain the markdown image line above, copied exactly " +
-    "(syntax: ![image](url)), so the image renders inline in every chat client. Then share the direct " +
-    "URL or viewer page so the user can open or download it.";
+    "renders image blocks. Copy the markdown line between the markers character-for-character to the TOP " +
+    "of your reply: the leading ! makes the chat client render the image itself INSIDE the conversation. " +
+    "NEVER replace it with a bare URL — a bare URL shows as a text link only, not as a picture.";
 
   return {
     content: [
@@ -856,9 +867,9 @@ async function execGetImage(
 /* Video tools (grok-imagine-video-1-5-preview via kie.ai)             */
 /* ------------------------------------------------------------------ */
 
-/** Public URL for one stored video (token in the query keeps the library private). */
+/** Public URL for one stored video (token in the path — see imageUrl above). */
 function videoUrl(id: string, token: string, baseUrl: string): string {
-  return `${baseUrl}/api/video-file/${id}?token=${encodeURIComponent(token)}`;
+  return `${baseUrl}/api/video-file/${id}/t/${encodeURIComponent(token)}`;
 }
 
 /**
@@ -902,11 +913,9 @@ async function buildFinishedVideoResult(
       posterBlocks += 1;
     }
     lines.push(
-      `Video ${i + 1} — id: ${r.id} (${meta})\n` +
-        `Markdown line to embed in your reply (renders the video's preview frame INLINE in the chat):\n` +
-        `![Video ${i + 1} preview](${poster})\n` +
-        `Play/download (MP4): ${url}\n` +
-        `Viewer page: ${view}`
+      `![Video ${i + 1} preview](${poster})\n` +
+        `▶ Watch the video (MP4): ${url}\n` +
+        `(viewer page: ${view})`
     );
   }
 
@@ -914,15 +923,18 @@ async function buildFinishedVideoResult(
   const text =
     `🎬 Generated ${rows.length} video${rows.length > 1 ? "s" : ""} with Grok Imagine (grok-imagine-video-1-5-preview).\n` +
     `Prompt: "${truncate(first.prompt, 400)}"\n` +
-    `\n${lines.join("\n")}\n\n` +
+    `\n=== EMBED THIS EXACT MARKDOWN AT THE TOP OF YOUR REPLY ===\n` +
+    `${lines.join("\n\n")}\n` +
+    `=== END MARKDOWN ===\n\n` +
     (posterBlocks > 0
       ? `The preview frame${posterBlocks > 1 ? "s" : ""} ${posterBlocks > 1 ? "are" : "is"} also attached above as image content block${posterBlocks > 1 ? "s" : ""} — display ${posterBlocks > 1 ? "them" : "it"} directly if your client renders image blocks. `
       : "") +
-    "IMPORTANT — how to share so the video shows up VISUALLY in the chat: your reply MUST contain the " +
-    "markdown preview line(s) above, copied exactly (syntax: ![Video N preview](poster-url)) — chat clients " +
-    "render that as an inline image of the video. Then paste the Play/download (MP4) URL and the Viewer " +
-    "page link on their own lines so the user can watch or download the full video. The video is also " +
-    "saved in the user's private video library on the Flare Studio website.";
+    "How to share so the video shows up VISUALLY in the chat: copy the lines between the markers " +
+    "character-for-character to the TOP of your reply. The markdown preview line (starting with !) renders " +
+    "the video's first frame as a picture INSIDE the conversation and the ▶ line under it lets the user " +
+    "play the full video. NEVER replace them with bare URLs — a bare URL shows as a text link only, not as " +
+    "a picture or player. The video is also saved in the user's private video library on the Flare Studio " +
+    "website.";
 
   content.push({ type: "text", text });
   return { content };
@@ -1169,14 +1181,16 @@ async function execGetVideo(
     `🎬 Video ${row.id} (${meta})\n` +
     `Prompt: "${truncate(row.prompt, 300)}"\n` +
     `Generated: ${new Date(row.createdAt).toISOString()}\n\n` +
-    `Markdown line to embed in your reply (renders the video's preview frame INLINE in the chat):\n` +
+    `=== EMBED THIS EXACT MARKDOWN AT THE TOP OF YOUR REPLY ===\n` +
     `![Video preview](${poster})\n` +
-    `Play/download (MP4): ${url}\n` +
-    `Viewer page: ${view}\n\n` +
-    "IMPORTANT — how to share: the preview frame is attached above as an image content block — display it " +
-    "directly if your client renders image blocks. Your reply MUST also contain the markdown preview line " +
-    "above, copied exactly (syntax: ![Video preview](poster-url)) so the video shows up VISUALLY in the " +
-    "chat, then paste the MP4 URL and/or the viewer page link so the user can watch or download it.";
+    `▶ Watch the video (MP4): ${url}\n` +
+    `(viewer page: ${view})\n` +
+    `=== END MARKDOWN ===\n\n` +
+    "How to share: the preview frame is also attached above as an image content block — display it directly " +
+    "if your client renders image blocks. Copy the lines between the markers character-for-character to the " +
+    "TOP of your reply: the markdown preview line (starting with !) renders the frame as a picture INSIDE " +
+    "the conversation and the ▶ line lets the user play the full video. NEVER replace them with bare URLs — " +
+    "a bare URL shows as a text link only, not as a picture or player.";
   content.push({ type: "text", text });
 
   return { content };
@@ -1218,17 +1232,18 @@ async function execListRecentVideos(
       return (
         `${i + 1}. id: ${r.id} [${r.resolution} ${r.aspectRatio} ${r.duration}s${flags ? `, ${flags}` : ""}] ` +
         `"${truncate(r.prompt, 120)}" — ${new Date(r.createdAt).toISOString()}\n` +
-        `   Markdown preview line: ![Video ${i + 1} preview](${poster})\n` +
-        `   Play/download (MP4): ${url}\n   Viewer page: ${view}`
+        `   ![Video ${i + 1} preview](${poster})\n` +
+        `   ▶ Watch the video (MP4): ${url}\n   viewer: ${view}`
       );
     })
     .join("\n");
 
   return textResult(
     `🎬 Your ${rows.length} most recent video${rows.length > 1 ? "s" : ""}:\n${lines}\n\n` +
-      "To share one of these videos in the chat: copy its Markdown preview line into your reply exactly as " +
-      "written (renders the preview frame inline), paste its Play/download MP4 URL, or call get_video with " +
-      "the video id to also receive the preview as an image content block."
+      "To share one of these videos in the chat: copy its ![Video N preview](url) markdown line into your " +
+      "reply exactly as written (the leading ! renders the preview frame inline as a picture — a bare URL " +
+      "shows as a text link only), paste its ▶ MP4 URL below it, or call get_video with the video id to " +
+      "also receive the preview as an image content block."
   );
 }
 
