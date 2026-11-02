@@ -1,11 +1,18 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { S3_MEDIA_ENABLED, deleteS3Media, s3MediaKey, s3MediaRedirect } from "@/lib/s3-storage";
 
 /**
  * GET /api/video-file/[id]?token=... → serves the stored video binary.
  * The caller must present the user token that owns the video, so the library
- * stays private per visitor. HTTP Range requests are honored so the browser
- * video player can seek (Safari requires this).
+ * stays private per visitor.
+ *
+ * When object storage (Neon S3) is enabled the request is answered with a 302
+ * to the storage object — large MP4s must not pass through the serverless
+ * response body limit, and the storage service handles Range/seeking natively
+ * (clients re-send the Range header after following the redirect). Legacy
+ * DB-only rows are lazily uploaded on first request; any storage failure
+ * falls back to streaming from the database (with Range support).
  */
 export async function GET(
   request: Request,
@@ -28,9 +35,16 @@ export async function GET(
     return NextResponse.json({ error: "الفيديو غير موجود أو لا يحق لك الوصول." }, { status: 404 });
   }
 
+  const videoKey = s3MediaKey("video", id, "mp4");
+  const contentType = row.mimeType || "video/mp4";
+
+  if (S3_MEDIA_ENABLED) {
+    const redirect = await s3MediaRedirect(videoKey, contentType, row.data);
+    if (redirect) return redirect;
+  }
+
   const bytes = Buffer.from(row.data, "base64");
   const total = bytes.byteLength;
-  const contentType = row.mimeType || "video/mp4";
   const rangeHeader = request.headers.get("range");
 
   // Simple single-range support (the video player uses it for seeking).
@@ -93,5 +107,12 @@ export async function DELETE(
   }
 
   await db.video.delete({ where: { id } });
+
+  // Best-effort cleanup of the storage mirrors.
+  await Promise.all([
+    deleteS3Media(s3MediaKey("video", id, "mp4")),
+    deleteS3Media(s3MediaKey("poster", id, "jpg")),
+  ]);
+
   return NextResponse.json({ deleted: true });
 }

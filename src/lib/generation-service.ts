@@ -8,6 +8,7 @@ import {
   mapUpstreamError,
   mimeForFormat,
 } from "@/lib/comet-server";
+import { s3MediaKey, uploadS3Media } from "@/lib/s3-storage";
 
 /**
  * Shared generation pipeline used by both the website (POST /api/generate,
@@ -124,7 +125,7 @@ export async function runGeneration(p: RunParams): Promise<void> {
   const createdAt = new Date();
 
   for (const img of b64Images) {
-    await db.generation.create({
+    const row = await db.generation.create({
       data: {
         userToken: p.userToken,
         jobId: p.jobId,
@@ -145,6 +146,14 @@ export async function runGeneration(p: RunParams): Promise<void> {
         createdAt,
       },
     });
+
+    // Mirror the image into S3-compatible storage so media routes can serve it
+    // by redirect (best-effort — the database copy stays the source of truth).
+    await uploadS3Media(
+      s3MediaKey("image", row.id, p.outputFormat),
+      Buffer.from(img.b64_json as string, "base64"),
+      mimeType
+    ).catch(() => undefined);
   }
 
   await db.job.update({ where: { id: p.jobId }, data: { status: "done" } });

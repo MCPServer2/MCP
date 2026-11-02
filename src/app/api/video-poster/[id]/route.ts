@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { S3_MEDIA_ENABLED, s3MediaKey, s3MediaRedirect } from "@/lib/s3-storage";
 import { ensureVideoPoster } from "@/lib/video-service";
 
 /**
@@ -8,6 +9,9 @@ import { ensureVideoPoster } from "@/lib/video-service";
  * inline: MCP tools embed it as an image block / markdown image next to the
  * playable MP4 link. The frame is extracted once with ffmpeg and cached in
  * the Video row. Requires the owner token, like every media route.
+ *
+ * With object storage (Neon S3) enabled it is served by 302 redirect, with
+ * a lazy upload of legacy rows and a DB-bytes fallback.
  */
 export async function GET(
   request: Request,
@@ -33,10 +37,17 @@ export async function GET(
     return NextResponse.json({ error: "تعذر استخراج معاينة الفيديو." }, { status: 404 });
   }
 
+  const contentType = poster.mime || "image/jpeg";
+
+  if (S3_MEDIA_ENABLED) {
+    const redirect = await s3MediaRedirect(s3MediaKey("poster", id, "jpg"), contentType, poster.base64);
+    if (redirect) return redirect;
+  }
+
   const bytes = Buffer.from(poster.base64, "base64");
   return new Response(new Uint8Array(bytes), {
     headers: {
-      "Content-Type": poster.mime || "image/jpeg",
+      "Content-Type": contentType,
       "Content-Length": String(bytes.byteLength),
       "Cache-Control": "private, max-age=31536000, immutable",
     },

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { deleteS3Media, s3MediaKey } from "@/lib/s3-storage";
 
 /** DELETE /api/gallery/[id]?token=... → remove a single generation. */
 export async function DELETE(
@@ -20,5 +21,9 @@ export async function DELETE(
   }
 
   await db.generation.delete({ where: { id } });
+
+  // Best-effort cleanup of the storage mirror.
+  await deleteS3Media(s3MediaKey("image", id, row.outputFormat || "png"));
+
   return NextResponse.json({ ok: true });
 }

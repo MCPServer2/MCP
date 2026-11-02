@@ -13,6 +13,7 @@ import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import type { VideoItem } from "@/lib/types";
+import { s3MediaKey, uploadS3Media } from "@/lib/s3-storage";
 
 /**
  * Shared video generation pipeline used by both the website (POST /api/video,
@@ -114,7 +115,7 @@ async function storeFinishedVideo(
   // Extract a preview frame up-front so the MCP tools can show the video
   // inline in chat clients without waiting for a lazy backfill.
   const poster = await extractPosterFrame(buf).catch(() => null);
-  await db.video.create({
+  const videoRow = await db.video.create({
     data: {
       userToken,
       jobId,
@@ -138,6 +139,17 @@ async function storeFinishedVideo(
       credits,
     },
   });
+
+  // Mirror the MP4 + poster into S3-compatible storage so media routes can
+  // serve them by redirect — large videos must not pass through the serverless
+  // response body. Best-effort: the database copy stays the source of truth.
+  await uploadS3Media(s3MediaKey("video", videoRow.id, "mp4"), buf, mimeType).catch(() => undefined);
+  if (poster) {
+    await uploadS3Media(s3MediaKey("poster", videoRow.id, "jpg"), Buffer.from(poster.base64, "base64"), poster.mime).catch(
+      () => undefined
+    );
+  }
+
   await db.job.update({ where: { id: jobId }, data: { status: "done" } });
 }
 
@@ -222,6 +234,12 @@ export async function ensureVideoPoster(
     await db.video
       .update({ where: { id: videoId }, data: { poster: extracted.base64, posterMime: extracted.mime } })
       .catch(() => undefined);
+    // Mirror the freshly extracted poster into storage (best-effort).
+    await uploadS3Media(
+      s3MediaKey("poster", videoId, "jpg"),
+      Buffer.from(extracted.base64, "base64"),
+      extracted.mime
+    ).catch(() => undefined);
     return extracted;
   } catch {
     return null;
