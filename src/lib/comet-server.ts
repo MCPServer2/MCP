@@ -217,3 +217,45 @@ export async function validateCometKey(
     return { valid: false, unreachable: true };
   }
 }
+
+/**
+ * Saves the provided CometAPI key as the account's key (encrypted, physically
+ * replacing the old ciphertext) with a fresh quota snapshot — the programmatic
+ * equivalent of saving a new key on the website images tab.
+ *
+ * Called when a generation succeeded with a caller-provided key while the
+ * saved one was invalid or out of quota: the newest key the user adds
+ * ANYWHERE (website or chat) becomes the account key, the old one is deleted.
+ */
+export async function adoptUserCometKey(userToken: string, apiKey: string): Promise<boolean> {
+  try {
+    const probe = await validateCometKey(apiKey); // free probe → quota snapshot
+    await db.userKey.upsert({
+      where: { userToken },
+      create: {
+        userToken,
+        cometApiKey: encryptSecret(apiKey),
+        cometName: probe.usage?.name || null,
+        cometAvailable: probe.usage
+          ? probe.usage.unlimitedQuota
+            ? null
+            : probe.usage.totalAvailable
+          : null,
+        cometUnlimited: probe.usage ? probe.usage.unlimitedQuota : null,
+      },
+      update: {
+        cometApiKey: encryptSecret(apiKey),
+        cometName: probe.usage?.name || null,
+        cometAvailable: probe.usage
+          ? probe.usage.unlimitedQuota
+            ? null
+            : probe.usage.totalAvailable
+          : null,
+        cometUnlimited: probe.usage ? probe.usage.unlimitedQuota : null,
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -134,6 +134,10 @@ export async function POST(request: Request) {
     background,
     autoEnhance: body.autoEnhance !== false,
     image: body.image ?? null,
+    // If the saved (vault) key turns out to be invalid/out of quota and this
+    // header carried a DIFFERENT key, the pipeline retries with it and adopts
+    // it as the new saved key — adding a new key anywhere replaces the old one.
+    explicitApiKey: headerKey,
   };
 
   after(async () => {

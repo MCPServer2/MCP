@@ -164,8 +164,10 @@ const TOOLS: ToolDef[] = [
           type: "string",
           description:
             "Optional personal CometAPI key. When omitted, the key the account owner saved on the " +
-            "website (images tab) is used automatically. Pass it only to bill this one generation " +
-            "to a different CometAPI account.",
+            "website (images tab) is used automatically. NEW-KEY RULE: if the saved key fails (invalid " +
+            "or out of quota) and a DIFFERENT key is supplied here, the supplied key is used and is " +
+            "saved automatically as the account's new key — the old one is replaced. So when the user " +
+            "gives you a new key, just pass it here once and it becomes their saved key everywhere.",
         },
         ...imageParams,
         background: {
@@ -208,8 +210,9 @@ const TOOLS: ToolDef[] = [
           type: "string",
           description:
             "Optional personal CometAPI key. When omitted, the key the account owner saved on the " +
-            "website (images tab) is used automatically. Pass it only to bill this one generation " +
-            "to a different CometAPI account.",
+            "website (images tab) is used automatically. NEW-KEY RULE: if the saved key fails (invalid " +
+            "or out of quota) and a DIFFERENT key is supplied here, the supplied key is used and is " +
+            "saved automatically as the account's new key — the old one is replaced.",
         },
         ...imageParams,
       },
@@ -293,10 +296,9 @@ const TOOLS: ToolDef[] = [
       "Supports pure text-to-video, animating an input image (image_url), a Start Frame and/or End Frame " +
       "(start_frame_url / end_frame_url), a Loop frame (loop_url — used as both first and last frame, " +
       "cannot be combined with start/end frames) and up to 4 mid-video keyframes " +
-      "(keyframes: [{url, timestamp_s}]). Billing uses the kie.ai key the account owner saved on the " +
-      "website — the newest saved key ALWAYS applies (adding a new key on the website deletes the old " +
-      "one and it takes effect everywhere, even if an older kie_key is still being sent). The optional " +
-      "kie_key argument is only a fallback when no key is saved on the website. Videos typically " +
+      "(keyframes: [{url, timestamp_s}]). Billing uses the kie.ai key saved on the website; if that key " +
+      "fails (invalid or out of credits) and a different kie_key argument is supplied, the supplied key " +
+      "is used AND saved as the account's new key automatically (the old one is replaced). Videos typically " +
       "finish in 40-120 seconds; if the tool replies that the job is still running, poll it with " +
       "check_video_job. The finished video is saved to the user's private library. The result includes " +
       "an INLINE PREVIEW IMAGE (a frame of the video) as an image content block and a markdown image " +
@@ -372,10 +374,11 @@ const TOOLS: ToolDef[] = [
         kie_key: {
           type: "string",
           description:
-            "Optional personal kie.ai API key — ONLY a fallback when no key is saved on the website. " +
-            "The key the account owner saved on the website (video tab) always wins: the newest saved " +
-            "key replaces any older one and applies automatically, so a previously sent kie_key is " +
-            "ignored once a key is saved.",
+            "Optional personal kie.ai API key. NEW-KEY RULE: the newest key the user provides ALWAYS " +
+            "wins. If the key saved on the website fails (invalid or out of credits) and a DIFFERENT " +
+            "key is supplied here, the supplied key is used and is saved automatically as the " +
+            "account's new key — the old one is replaced. So when the user gives you a new kie.ai " +
+            "key, just pass it here once and it becomes their saved key everywhere.",
         },
       },
       additionalProperties: false,
@@ -737,6 +740,10 @@ async function execGenerateImage(
     background,
     autoEnhance: false,
     image,
+    // If the saved (vault) key fails with a balance/validity problem and a
+    // DIFFERENT api_key was supplied, the pipeline retries with it and adopts
+    // it as the new saved key — adding a new key anywhere replaces the old one.
+    explicitApiKey: argKey ?? creds.key ?? null,
   };
 
   // Start the generation and wait for it (bounded) while the SSE stream keeps
@@ -1374,7 +1381,10 @@ async function dispatchRequest(
           "Start/End frames, Loop frames and keyframes; poll with check_video_job, and use get_video / " +
           "list_recent_videos for the video library. Billing uses the keys the account owner saved on the " +
           "website automatically (CometAPI for images, kie.ai for videos) — never ask the user for a key, " +
-          "just call the tools. " +
+          "just call the tools. KEY RULE: if a generation fails because the saved key is out of credits " +
+          "or invalid, ask the user for their NEW key and retry once by passing it (api_key for images, " +
+          "kie_key for videos) — the new key is then saved automatically and replaces the old one " +
+          "everywhere, so it applies to all future generations too. " +
           "DISPLAY RULE (images and videos alike): whenever you generate, fetch or re-share media, START your " +
           "reply with the ready-made markdown line(s) the tool returns — ![image](url) renders the actual " +
           "picture INSIDE the chat, and the video's ![preview](url) line plus the ▶ Watch the video (MP4) " +

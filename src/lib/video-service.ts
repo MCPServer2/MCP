@@ -2,12 +2,15 @@ import { db } from "@/lib/db";
 import {
   GROK_VIDEO_MODEL,
   KieError,
+  adoptUserKieKey,
   createVideoTask,
   ensureKieImageUrl,
   getVideoTask,
   getUserKieKey,
+  isKieKeyProblem,
   type VideoKeyframe,
 } from "@/lib/kie-server";
+import { maskKey } from "@/lib/key-vault";
 import { spawn } from "child_process";
 import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
@@ -39,6 +42,20 @@ const STALE_PROCESSING_MS = 150_000;
 /** A "pending" video job older than this is dead (createTask never ran). */
 const STALE_PENDING_MS = 8 * 60 * 1000;
 const MAX_VIDEO_BYTES = 80 * 1024 * 1024; // 80 MB binary per video
+
+/**
+ * Appends WHICH key was used (masked) to key-problem errors and how to fix
+ * them — the user must be able to tell whether the old or the new key ran.
+ */
+function enrichKeyProblem(error: unknown, usedKey?: string | null): unknown {
+  if (!(error instanceof KieError) || !isKieKeyProblem(error)) return error;
+  const hint =
+    error.code === 402
+      ? "أضف مفتاح kie.ai جديدًا (من تبويب توليد الفيديو أو أرسله للمساعد) وسيُستخدم ويُحفظ تلقائيًا بدل القديم."
+      : "أضف مفتاح kie.ai صحيحًا (من تبويب توليد الفيديو أو أرسله للمساعد) وسيُستخدم ويُحفظ تلقائيًا بدل القديم.";
+  const which = usedKey ? ` (المفتاح المستخدم: ${maskKey(usedKey)})` : "";
+  return new KieError(`${error.message}${which} ${hint}`, error.status, error.code);
+}
 
 export interface VideoRunParams {
   jobId: string;
@@ -283,34 +300,75 @@ export async function runVideoGeneration(p: VideoRunParams): Promise<void> {
   // away — stale keys re-sent by old clients can never shadow it) → per-request
   // key as a fallback when nothing is saved → server's built-in KIE_API_KEY
   // (resolveKieKey throws when none exists).
-  const kieKey = (await getUserKieKey(p.userToken)) || p.kieKey;
+  const vaultKey = await getUserKieKey(p.userToken);
+  const kieKey = vaultKey || p.kieKey;
 
-  // 2) Make sure every frame is a URL the video model can download.
-  const [startFrame, endFrame, loopFrame, referenceImage] = await Promise.all([
-    p.startFrame ? ensureKieImageUrl(p.startFrame, kieKey) : Promise.resolve(null),
-    p.endFrame ? ensureKieImageUrl(p.endFrame, kieKey) : Promise.resolve(null),
-    p.loopFrame ? ensureKieImageUrl(p.loopFrame, kieKey) : Promise.resolve(null),
-    p.referenceImage ? ensureKieImageUrl(p.referenceImage, kieKey) : Promise.resolve(null),
-  ]);
-  const keyframes: VideoKeyframe[] = [];
-  for (const k of p.keyframes ?? []) {
-    keyframes.push({ url: await ensureKieImageUrl(k.url, kieKey), timestamp: k.timestamp });
+  // 2) Make sure every frame is a URL the video model can download, then
+  // create the upstream task — as one retryable "start" phase.
+  const startUpstream = async (key?: string | null): Promise<string> => {
+    const [startFrame, endFrame, loopFrame, referenceImage] = await Promise.all([
+      p.startFrame ? ensureKieImageUrl(p.startFrame, key) : Promise.resolve(null),
+      p.endFrame ? ensureKieImageUrl(p.endFrame, key) : Promise.resolve(null),
+      p.loopFrame ? ensureKieImageUrl(p.loopFrame, key) : Promise.resolve(null),
+      p.referenceImage ? ensureKieImageUrl(p.referenceImage, key) : Promise.resolve(null),
+    ]);
+    const keyframes: VideoKeyframe[] = [];
+    for (const k of p.keyframes ?? []) {
+      keyframes.push({ url: await ensureKieImageUrl(k.url, key), timestamp: k.timestamp });
+    }
+    return createVideoTask({
+      prompt: p.prompt,
+      imageUrls: referenceImage ? [referenceImage] : undefined,
+      aspectRatio: p.aspectRatio,
+      resolution: p.resolution,
+      duration: p.duration,
+      firstFrameUrl: startFrame ?? undefined,
+      lastFrameUrl: endFrame ?? undefined,
+      loopUrl: loopFrame ?? undefined,
+      keyframes: keyframes.length ? keyframes : undefined,
+      enableAudio: p.audio,
+    }, key);
+  };
+
+  // NEW-KEY SEMANTICS: when the resolved key FAILS because it is invalid or
+  // out of credits and the caller supplied a DIFFERENT explicit key (MCP
+  // kie_key argument / website header), the provided key is used instead and
+  // AUTOMATICALLY ADOPTED as the account's new saved key — the old one is
+  // replaced, exactly like saving it on the website. The newest key the user
+  // adds anywhere wins.
+  let effectiveKey = kieKey;
+  let taskId: string;
+  try {
+    taskId = await startUpstream(effectiveKey);
+  } catch (first) {
+    const canRetry =
+      first instanceof KieError &&
+      isKieKeyProblem(first) &&
+      Boolean(p.kieKey) &&
+      p.kieKey !== effectiveKey;
+    if (!canRetry) {
+      throw enrichKeyProblem(first, kieKey);
+    }
+    try {
+      taskId = await startUpstream(p.kieKey);
+    } catch (second) {
+      if (isKieKeyProblem(second)) {
+        throw new KieError(
+          `تعذّر التوليد بالمفتاحين: المحفوظ (${maskKey(kieKey ?? "")}) والمُرسل (${maskKey(p.kieKey ?? "")}) — ${
+            second instanceof KieError ? second.message : "خطأ غير متوقع"
+          }. أضف مفتاح kie.ai جديدًا من تبويب توليد الفيديو وسيُستخدم ويُحفظ تلقائيًا.`,
+          second instanceof KieError ? second.status : 502
+        );
+      }
+      throw second;
+    }
+    effectiveKey = p.kieKey as string;
+    // Adopt: the provided key replaces the dead saved one everywhere (site +
+    // MCP). Best-effort — the generation itself already succeeded.
+    await adoptUserKieKey(p.userToken, effectiveKey).catch(() => undefined);
   }
 
-  // 3) Create the upstream task and remember its id + key for recovery.
-  const taskId = await createVideoTask({
-    prompt: p.prompt,
-    imageUrls: referenceImage ? [referenceImage] : undefined,
-    aspectRatio: p.aspectRatio,
-    resolution: p.resolution,
-    duration: p.duration,
-    firstFrameUrl: startFrame ?? undefined,
-    lastFrameUrl: endFrame ?? undefined,
-    loopUrl: loopFrame ?? undefined,
-    keyframes: keyframes.length ? keyframes : undefined,
-    enableAudio: p.audio,
-  }, kieKey);
-  await db.job.update({ where: { id: p.jobId }, data: { taskId, kieKey: kieKey || null } });
+  await db.job.update({ where: { id: p.jobId }, data: { taskId, kieKey: effectiveKey || null } });
 
   // 4) Poll until the MP4 is ready (or the poll budget runs out).
   const deadline = Date.now() + POLL_BUDGET_MS;
@@ -320,7 +378,9 @@ export async function runVideoGeneration(p: VideoRunParams): Promise<void> {
       // Keep the job processing — recovery paths finish it via the taskId.
       return;
     }
-    const record = await getVideoTask(taskId, kieKey);
+    // Poll with the key that CREATED the task (after adoption this is the
+    // caller-provided new key — the old key cannot see the task at all).
+    const record = await getVideoTask(taskId, effectiveKey);
     if (record.state === "success" && record.resultUrls.length > 0) {
       await storeFinishedVideo(p.jobId, p.userToken, taskId, record.resultUrls[0], p, record.credits);
       return;

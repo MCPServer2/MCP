@@ -34,9 +34,12 @@ export const MAX_KEYFRAME_S = 15;
 
 export class KieError extends Error {
   status: number;
-  constructor(message: string, status = 502) {
+  /** Raw kie.ai error code (401 invalid key, 402 insufficient credits, …). */
+  code: number | null;
+  constructor(message: string, status = 502, code: number | null = null) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -150,19 +153,60 @@ export async function validateKieKey(
 export function mapKieCode(code: number, msg: string): KieError {
   switch (code) {
     case 200:
-      return new KieError(`نجاح غير متوقع مع رسالة: ${msg}`, 200);
+      return new KieError(`نجاح غير متوقع مع رسالة: ${msg}`, 200, code);
     case 401:
-      return new KieError("مفتاح kie.ai غير صالح أو منتهي الصلاحية.", 500);
+      return new KieError("مفتاح kie.ai غير صالح أو منتهي الصلاحية.", 500, code);
     case 402:
-      return new KieError("رصيد kie.ai غير كافٍ لتوليد الفيديو.", 402);
+      return new KieError("رصيد kie.ai غير كافٍ لتوليد الفيديو.", 402, code);
     case 404:
-      return new KieError("مهمة الفيديو غير موجودة على kie.ai.", 404);
+      return new KieError("مهمة الفيديو غير موجودة على kie.ai.", 404, code);
     case 429:
-      return new KieError("تم تجاوز حد معدل طلبات kie.ai. انتظر قليلاً ثم أعد المحاولة.", 429);
+      return new KieError("تم تجاوز حد معدل طلبات kie.ai. انتظر قليلاً ثم أعد المحاولة.", 429, code);
     case 422:
-      return new KieError(`رفض kie.ai معاملات الطلب: ${msg || "تحقق من الإطارات والمدة والقيم."}`, 400);
+      return new KieError(`رفض kie.ai معاملات الطلب: ${msg || "تحقق من الإطارات والمدة والقيم."}`, 400, code);
     default:
-      return new KieError(`خطأ من kie.ai (${code}): ${msg || "بدون تفاصيل."}`, 502);
+      return new KieError(`خطأ من kie.ai (${code}): ${msg || "بدون تفاصيل."}`, 502, code);
+  }
+}
+
+/**
+ * True when the error means the KEY ITSELF is the problem (invalid or out of
+ * credits) rather than the request parameters — the signal to retry with a
+ * caller-provided replacement key and adopt it (see video-service.ts).
+ */
+export function isKieKeyProblem(error: unknown): boolean {
+  return error instanceof KieError && (error.code === 401 || error.code === 402);
+}
+
+/**
+ * Saves the provided key as the account's kie.ai key (encrypted, physically
+ * replacing the old ciphertext) and snapshots its balance — the programmatic
+ * equivalent of saving a new key on the website video tab.
+ *
+ * Called when a generation succeeded with a caller-provided key while the
+ * saved one was invalid or out of credits: the newest key the user adds
+ * ANYWHERE (website or chat) becomes the account key, the old one is deleted.
+ */
+export async function adoptUserKieKey(userToken: string, key: string): Promise<boolean> {
+  try {
+    const probe = await validateKieKey(key); // free probe → balance snapshot
+    await db.userKey.upsert({
+      where: { userToken },
+      create: {
+        userToken,
+        kieApiKey: encryptSecret(key),
+        kieCredits: probe.credits,
+        kieCheckedAt: probe.unreachable ? null : new Date(),
+      },
+      update: {
+        kieApiKey: encryptSecret(key),
+        kieCredits: probe.credits,
+        kieCheckedAt: probe.unreachable ? null : new Date(),
+      },
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -237,6 +281,12 @@ export async function ensureKieImageUrl(rawUrl: string, userKey?: string | null)
     data?: { downloadUrl?: string };
   } | null;
   if (!res.ok || !payload?.success || !payload.data?.downloadUrl) {
+    // Surface key problems as keyed errors so the pipeline can retry with a
+    // caller-provided replacement key (isKieKeyProblem).
+    const code = payload?.code ?? (res.status === 401 || res.status === 402 ? res.status : null);
+    if (code === 401 || code === 402) {
+      throw mapKieCode(code, payload?.msg ?? "");
+    }
     throw new KieError(
       `فشل رفع صورة الإطار إلى kie.ai (${payload?.msg || `HTTP ${res.status}`}).`,
       502

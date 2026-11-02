@@ -3,6 +3,7 @@ import {
   COMET_BASE,
   FLARE_MODEL,
   CometError,
+  adoptUserCometKey,
   dataUrlToBlob,
   buildSketchPrompt,
   mapUpstreamError,
@@ -46,6 +47,14 @@ export interface RunParams {
   background?: string;
   autoEnhance: boolean;
   image?: string | null;
+  /**
+   * The key the CALLER explicitly supplied for this request (MCP api_key
+   * argument / x-cometapi-key header), if any — distinct from p.apiKey which
+   * is the resolved (vault-first) key. Used as the retry fallback when the
+   * resolved key fails with a balance/validity problem, then adopted as the
+   * new saved key on success (the old one is replaced).
+   */
+  explicitApiKey?: string | null;
 }
 
 /** Runs the upstream CometAPI call and persists results as Generation rows. */
@@ -56,14 +65,15 @@ export async function runGeneration(p: RunParams): Promise<void> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 280_000);
 
-  let response: Response;
-  try {
+  // One upstream call with a given key — factored out so a key failure can be
+  // retried with the caller-provided replacement key (see below).
+  const doFetch = (apiKey: string): Promise<Response> => {
     if (p.mode === "generate" && !hasImage) {
       // Pure text-to-image → JSON generations endpoint.
-      response = await fetch(`${COMET_BASE}/v1/images/generations`, {
+      return fetch(`${COMET_BASE}/v1/images/generations`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${p.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
         signal: controller.signal,
@@ -77,40 +87,67 @@ export async function runGeneration(p: RunParams): Promise<void> {
           ...(p.background ? { background: p.background } : {}),
         }),
       });
-    } else {
-      // Sketch mode (source drawing) OR text-to-image with a reference image
-      // → multipart edits endpoint, per CometAPI docs.
-      const formData = new FormData();
-      const blob = dataUrlToBlob(p.image as string);
-      const ext = blob.type.includes("jpeg") ? "jpg" : blob.type.includes("webp") ? "webp" : "png";
-      formData.append("image", blob, p.mode === "sketch" ? `sketch.${ext}` : `reference.${ext}`);
-      formData.append("model", FLARE_MODEL);
-      formData.append(
-        "prompt",
-        p.mode === "sketch" ? buildSketchPrompt(p.prompt, p.autoEnhance) : p.prompt
-      );
-      formData.append("n", String(p.n));
-      if (p.size && p.size !== "auto") formData.append("size", p.size);
-      if (p.quality && p.quality !== "auto") formData.append("quality", p.quality);
-      formData.append("output_format", p.outputFormat);
-      if (p.mode === "generate" && p.background && p.background !== "auto") {
-        formData.append("background", p.background);
-      }
-
-      response = await fetch(`${COMET_BASE}/v1/images/edits`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${p.apiKey}` },
-        signal: controller.signal,
-        body: formData,
-      });
     }
+    // Sketch mode (source drawing) OR text-to-image with a reference image
+    // → multipart edits endpoint, per CometAPI docs.
+    const formData = new FormData();
+    const blob = dataUrlToBlob(p.image as string);
+    const ext = blob.type.includes("jpeg") ? "jpg" : blob.type.includes("webp") ? "webp" : "png";
+    formData.append("image", blob, p.mode === "sketch" ? `sketch.${ext}` : `reference.${ext}`);
+    formData.append("model", FLARE_MODEL);
+    formData.append(
+      "prompt",
+      p.mode === "sketch" ? buildSketchPrompt(p.prompt, p.autoEnhance) : p.prompt
+    );
+    formData.append("n", String(p.n));
+    if (p.size && p.size !== "auto") formData.append("size", p.size);
+    if (p.quality && p.quality !== "auto") formData.append("quality", p.quality);
+    formData.append("output_format", p.outputFormat);
+    if (p.mode === "generate" && p.background && p.background !== "auto") {
+      formData.append("background", p.background);
+    }
+    return fetch(`${COMET_BASE}/v1/images/edits`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+      body: formData,
+    });
+  };
+
+  let response: Response;
+  try {
+    response = await doFetch(p.apiKey);
   } finally {
     clearTimeout(timeout);
   }
 
   if (!response.ok) {
     const errBody = await response.text();
-    throw mapUpstreamError(response.status, errBody);
+    const first = mapUpstreamError(response.status, errBody);
+    // NEW-KEY SEMANTICS: the resolved (saved) key failed with a balance or
+    // validity problem, but the caller supplied a DIFFERENT explicit key —
+    // retry with it; on success it is ADOPTED as the account's new saved key
+    // (the old one is replaced, exactly like saving it on the website). The
+    // newest key the user adds anywhere wins.
+    const retryable =
+      Boolean(p.explicitApiKey) &&
+      p.explicitApiKey !== p.apiKey &&
+      [401, 402, 403].includes(first.status);
+    if (!retryable) throw first;
+    let retry: Response;
+    try {
+      retry = await doFetch(p.explicitApiKey as string);
+    } catch {
+      throw first;
+    }
+    if (!retry.ok) {
+      const second = mapUpstreamError(retry.status, await retry.text());
+      throw new CometError(`${first.message} — والمفتاح البديل فشل أيضًا: ${second.message}`, first.status);
+    }
+    response = retry;
+    // Adopt: the provided key replaces the dead saved one everywhere (site +
+    // MCP). Best-effort — the generation itself already succeeded.
+    await adoptUserCometKey(p.userToken, p.explicitApiKey as string).catch(() => undefined);
   }
 
   const payload = (await response.json()) as CometImageResponse;
