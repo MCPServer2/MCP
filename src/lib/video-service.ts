@@ -8,6 +8,10 @@ import {
   getUserKieKey,
   type VideoKeyframe,
 } from "@/lib/kie-server";
+import { spawn } from "child_process";
+import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { tmpdir } from "os";
+import path from "path";
 import type { VideoItem } from "@/lib/types";
 
 /**
@@ -107,6 +111,9 @@ async function storeFinishedVideo(
   }
 
   const mimeType = res.headers.get("content-type")?.split(";")[0]?.trim() ?? "video/mp4";
+  // Extract a preview frame up-front so the MCP tools can show the video
+  // inline in chat clients without waiting for a lazy backfill.
+  const poster = await extractPosterFrame(buf).catch(() => null);
   await db.video.create({
     data: {
       userToken,
@@ -126,10 +133,99 @@ async function storeFinishedVideo(
       sourceUrl: videoUrl,
       mimeType,
       data: buf.toString("base64"),
+      poster: poster?.base64 ?? null,
+      posterMime: poster?.mime ?? null,
       credits,
     },
   });
   await db.job.update({ where: { id: jobId }, data: { status: "done" } });
+}
+
+/* ------------------------------------------------------------------ */
+/* Poster frames — make videos VISIBLE inside chat clients             */
+/* ------------------------------------------------------------------ */
+
+const POSTER_MAX_W = 768;
+
+/**
+ * Extracts a representative JPEG frame from an MP4 buffer with ffmpeg.
+ * Prefers a frame at ~1s (avoids an all-black opener); falls back to the
+ * first frame. Returns null on any failure — posters are best-effort and
+ * must never break video delivery.
+ */
+async function extractPosterFrame(buf: Buffer): Promise<{ base64: string; mime: string } | null> {
+  const dir = await mkdtemp(path.join(tmpdir(), "flare-poster-"));
+  const src = path.join(dir, "input.mp4");
+  const out = path.join(dir, "poster.jpg");
+  try {
+    await writeFile(src, buf);
+    const attempt = (atSec: number) =>
+      new Promise<boolean>((resolve) => {
+        const proc = spawn(
+          "ffmpeg",
+          [
+            "-hide_banner", "-loglevel", "error",
+            "-ss", atSec.toFixed(1),
+            "-i", src,
+            "-vframes", "1",
+            "-vf", `scale='min(${POSTER_MAX_W},iw)':-2`,
+            "-q:v", "4",
+            "-y", out,
+          ],
+          { stdio: "ignore" }
+        );
+        const timer = setTimeout(() => {
+          proc.kill("SIGKILL");
+          resolve(false);
+        }, 20_000);
+        proc.on("error", () => {
+          clearTimeout(timer);
+          resolve(false);
+        });
+        proc.on("close", (code) => {
+          clearTimeout(timer);
+          resolve(code === 0);
+        });
+      });
+
+    // Try 1s first; a video shorter than 1s still yields the first frame.
+    if (!(await attempt(1.0)) && !(await attempt(0))) return null;
+
+    const jpg = await readFile(out);
+    if (jpg.byteLength === 0) return null;
+    return { base64: jpg.toString("base64"), mime: "image/jpeg" };
+  } catch {
+    return null;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Returns the stored poster for a video, extracting and caching it on first
+ * use — this also backfills videos saved before posters existed. Best-effort:
+ * returns null when ffmpeg is unavailable or the payload is unreadable.
+ */
+export async function ensureVideoPoster(
+  videoId: string
+): Promise<{ base64: string; mime: string } | null> {
+  try {
+    const row = await db.video.findUnique({
+      where: { id: videoId },
+      select: { poster: true, posterMime: true, data: true },
+    });
+    if (!row?.data) return null;
+    if (row.poster) return { base64: row.poster, mime: row.posterMime || "image/jpeg" };
+
+    const extracted = await extractPosterFrame(Buffer.from(row.data, "base64"));
+    if (!extracted) return null;
+    await db.video
+      .update({ where: { id: videoId }, data: { poster: extracted.base64, posterMime: extracted.mime } })
+      .catch(() => undefined);
+    return extracted;
+  } catch {
+    return null;
+  }
 }
 
 /** Runs the full video generation and persists the result. Throws KieError. */

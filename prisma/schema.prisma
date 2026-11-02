@@ -92,6 +92,8 @@ model Video {
   sourceUrl      String?
   mimeType       String   @default("video/mp4")
   data           String // base64 video payload
+  poster         String? // base64 JPEG preview frame (ffmpeg-extracted) shown INLINE in chat clients
+  posterMime     String?  @default("image/jpeg")
   credits        Float?
   createdAt      DateTime @default(now())
 
