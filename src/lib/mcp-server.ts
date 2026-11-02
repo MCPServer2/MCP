@@ -671,17 +671,30 @@ function textResult(text: string, isError = false): ToolResult {
   return { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) };
 }
 
+/** Maps a stored output format (png/jpeg/webp/…) to a file extension. */
+function imageExt(format?: string | null): string {
+  const f = (format ?? "").toLowerCase();
+  if (f === "jpeg" || f === "jpg") return "jpg";
+  if (f === "webp") return "webp";
+  return "png";
+}
+
 /**
- * Public URL for one stored image, with the token in the PATH.
+ * Public URL for one stored image, with the token in the PATH and an image
+ * extension in the FILENAME.
  *
  * Path tokens (instead of ?token= query strings) are the canonical shape for
  * every URL the MCP results embed in markdown: some chat clients run markdown
  * image URLs through sanitizers that strip query strings, which would turn
- * the picture into a broken image / bare link. The media routes accept both
- * shapes; this one always renders.
+ * the picture into a broken image / bare link. The .png/.jpg/.webp suffix is
+ * the second half of the trick — many chat clients (ChatGPT, Claude, Slack,
+ * …) only inline-render markdown images whose URL ends in a recognizable
+ * image extension and degrade extensionless URLs to a text link. The
+ * filename is cosmetic: the served bytes + Content-Type come from the stored
+ * row. The media routes accept both shapes; this one always renders.
  */
-function imageUrl(id: string, token: string, baseUrl: string): string {
-  return `${baseUrl}/api/image/${id}/t/${encodeURIComponent(token)}`;
+function imageUrl(id: string, token: string, baseUrl: string, format?: string | null): string {
+  return `${baseUrl}/api/image/${id}/t/${encodeURIComponent(token)}/img.${imageExt(format)}`;
 }
 
 /** Browser-friendly HTML viewer page for one image (always works as a share link). */
@@ -689,9 +702,13 @@ function imageViewerUrl(id: string, token: string, baseUrl: string): string {
   return `${baseUrl}/api/view/image/${id}/t/${encodeURIComponent(token)}`;
 }
 
-/** JPEG preview frame of a stored video (extracted with ffmpeg, cached in DB). */
+/**
+ * JPEG preview frame of a stored video (extracted with ffmpeg, cached in DB).
+ * Ends in .jpg — that extension is what makes chat clients inline-render the
+ * preview instead of showing a text link.
+ */
 function videoPosterUrl(id: string, token: string, baseUrl: string): string {
-  return `${baseUrl}/api/video-poster/${id}/t/${encodeURIComponent(token)}`;
+  return `${baseUrl}/api/video-poster/${id}/t/${encodeURIComponent(token)}/poster.jpg`;
 }
 
 /** Browser-friendly HTML viewer page for one video (plays inline, OG tags). */
@@ -730,7 +747,7 @@ async function buildFinishedJobResult(
 
   const links = rows
     .map((r, i) => {
-      const url = imageUrl(r.id, token, baseUrl);
+      const url = imageUrl(r.id, token, baseUrl, r.outputFormat);
       const view = imageViewerUrl(r.id, token, baseUrl);
       return `![Image ${i + 1}](${url})\n(viewer / download page: ${view})`;
     })
@@ -747,10 +764,11 @@ async function buildFinishedJobResult(
     (attached > 0
       ? `The actual image data ${attached > 1 ? `for the first ${attached} image${attached > 2 ? "s" : ""}` : ""} is also attached above as image content block${attached > 1 ? "s" : ""} — display ${attached > 1 ? "them" : "it"} directly if your client renders image blocks. `
       : "") +
-    "How to display: copy the markdown line(s) between the markers character-for-character to the TOP of " +
-    "your reply. The leading ! makes the chat client render the image itself INSIDE the conversation. " +
-    "NEVER replace it with a bare URL — a bare URL shows as a text link only, not as a picture. After the " +
-    "markdown you may add the viewer page link so the user can open or download the full-size file. " +
+    "How to display: START your reply with the markdown line(s) between the markers, copied " +
+    "character-for-character. The leading ! makes the chat client render the image itself INSIDE the " +
+    "conversation (the URL ends in .png/.jpg/.webp, which every client inlines). NEVER replace it with " +
+    "a bare URL or a plain link — text links force the user to leave the chat. After the image line(s) " +
+    "you may add the viewer page link so the user can open or download the full-size file. " +
     "The images are also saved in the user's private gallery on the Flare Studio website.";
 
   content.push({ type: "text", text });
@@ -923,7 +941,7 @@ async function execListRecent(
 
   const lines = rows
     .map((r, i) => {
-      const url = imageUrl(r.id, token, baseUrl);
+      const url = imageUrl(r.id, token, baseUrl, r.outputFormat);
       const view = imageViewerUrl(r.id, token, baseUrl);
       return (
         `${i + 1}. id: ${r.id} [${r.mode}${r.usedReference ? " + reference" : ""}, ${r.size} ${r.outputFormat}] ` +
@@ -972,7 +990,7 @@ async function execGetImage(
     );
   }
 
-  const url = imageUrl(row.id, token, baseUrl);
+  const url = imageUrl(row.id, token, baseUrl, row.outputFormat);
   const view = imageViewerUrl(row.id, token, baseUrl);
   // Ultra-large images skip the base64 block (size-limited clients would choke
   // on it) — the markdown URL below still renders them inline in the chat.
@@ -990,10 +1008,11 @@ async function execGetImage(
         "renders image blocks. "
       : "The image is too large to attach as a content block — the markdown URL above still renders it " +
         "inline in the chat. ") +
-    "How to display: copy the markdown line between the markers character-for-character to the TOP " +
-    "of your reply — the leading ! makes the chat client render the actual image INSIDE the conversation, " +
-    "so the user sees the picture immediately. NEVER replace it with a bare URL — a bare URL shows as a " +
-    "text link only, not as a picture.";
+    "How to display: START your reply with the ![image](…) markdown line between the markers, copied " +
+    "character-for-character — the leading ! makes the chat client render the actual image INSIDE the " +
+    "conversation (the URL ends in .png/.jpg, which every client inlines), so the user sees the picture " +
+    "immediately without leaving the chat. NEVER replace it with a bare URL or a plain link — text links " +
+    "show as text only and force the user to navigate away.";
 
   const content: ToolResult["content"] = [];
   if (attachBlock) {
@@ -1007,9 +1026,12 @@ async function execGetImage(
 /* Video tools (grok-imagine-video-1-5-preview via kie.ai)             */
 /* ------------------------------------------------------------------ */
 
-/** Public URL for one stored video (token in the path — see imageUrl above). */
+/**
+ * Public URL for one stored video (token in the path — see imageUrl above).
+ * Ends in .mp4 so chat clients and downloaders recognize a playable file.
+ */
 function videoUrl(id: string, token: string, baseUrl: string): string {
-  return `${baseUrl}/api/video-file/${id}/t/${encodeURIComponent(token)}`;
+  return `${baseUrl}/api/video-file/${id}/t/${encodeURIComponent(token)}/video.mp4`;
 }
 
 /**
@@ -1069,12 +1091,13 @@ async function buildFinishedVideoResult(
     (posterBlocks > 0
       ? `The preview frame${posterBlocks > 1 ? "s" : ""} ${posterBlocks > 1 ? "are" : "is"} also attached above as image content block${posterBlocks > 1 ? "s" : ""} — display ${posterBlocks > 1 ? "them" : "it"} directly if your client renders image blocks. `
       : "") +
-    "How to share so the video shows up VISUALLY in the chat: copy the lines between the markers " +
-    "character-for-character to the TOP of your reply. The markdown preview line (starting with !) renders " +
-    "the video's first frame as a picture INSIDE the conversation and the ▶ line under it lets the user " +
-    "play the full video. NEVER replace them with bare URLs — a bare URL shows as a text link only, not as " +
-    "a picture or player. The video is also saved in the user's private video library on the Flare Studio " +
-    "website.";
+    "How to share so the video shows up VISUALLY in the chat: START your reply with the lines between " +
+    "the markers, copied character-for-character. The markdown preview line (starting with !, a .jpg URL) " +
+    "renders the video's first frame as a picture INSIDE the conversation and the ▶ line under it (a " +
+    ".mp4 URL) lets the user play the full video. NEVER replace them with bare URLs — a plain link shows " +
+    "as text only and forces the user to leave the chat. No chat client can play MP4 inline, so the " +
+    "preview frame + play link IS the correct full display. The video is also saved in the user's " +
+    "private video library on the Flare Studio website.";
 
   content.push({ type: "text", text });
   return { content };
@@ -1338,10 +1361,11 @@ async function execGetVideo(
     `(viewer page: ${view})\n` +
     `=== END MARKDOWN ===\n\n` +
     "How to share: the preview frame is also attached above as an image content block — display it directly " +
-    "if your client renders image blocks. Copy the lines between the markers character-for-character to the " +
-    "TOP of your reply: the markdown preview line (starting with !) renders the frame as a picture INSIDE " +
-    "the conversation and the ▶ line lets the user play the full video, so both are visible immediately. " +
-    "NEVER replace them with bare URLs — a bare URL shows as a text link only, not as a picture or player.";
+    "if your client renders image blocks. START your reply with the lines between the markers, copied " +
+    "character-for-character: the markdown preview line (starting with !, a .jpg URL) renders the frame as " +
+    "a picture INSIDE the conversation and the ▶ line under it (a .mp4 URL) lets the user play the full " +
+    "video, so both are visible immediately without leaving the chat. NEVER replace them with bare URLs — " +
+    "a plain link shows as text only and forces the user to navigate away.";
   content.push({ type: "text", text });
 
   return { content };
@@ -1620,7 +1644,8 @@ async function dispatchRequest(
           "copied MCP URL from the website. " +
           "DISPLAY RULE (images and videos alike): whenever you generate, fetch or re-share media, START your " +
           "reply with the ready-made markdown line(s) the tool returns — ![image](url) renders the actual " +
-          "picture INSIDE the chat, and the video's ![preview](url) line plus the ▶ Watch the video (MP4) " +
+          "picture INSIDE the chat (the URLs end in .png/.jpg/.mp4 exactly so every client inlines them), " +
+          "and the video's ![preview](url) line plus the ▶ Watch the video (MP4) " +
           "line below it show the frame and let the user play the video. When the user asks to see, fetch, " +
           "show or re-send any earlier image or video (for example 'show me my last picture', 'get my " +
           "videos'), call list_recent_images / get_image / list_recent_videos / get_video — get_image and " +
