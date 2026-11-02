@@ -115,3 +115,29 @@ export function maskKey(key: string): string {
   if (k.length <= 8) return "••••";
   return `${k.slice(0, 4)}…${k.slice(-4)}`;
 }
+
+/**
+ * Bilingual fix-it tail appended to key-problem errors (invalid key / out of
+ * credits). It addresses BOTH audiences at once: the website user (Arabic —
+ * add the new key on the site) and the chat assistant driving the MCP tools
+ * (English — collect the new key, save it with the save_* tool or pass it as
+ * the per-call argument; both replace the dead key everywhere). It also covers
+ * the "key added on the website but under a DIFFERENT token" case: MCP URLs
+ * carry the account token, so a key saved on the site is only visible to an
+ * MCP connection whose URL token matches — the fix is reconnecting with a
+ * freshly copied URL from the website.
+ */
+export function keyFixHint(provider: "kie" | "comet"): string {
+  const label = provider === "kie" ? "kie.ai" : "CometAPI";
+  const where = provider === "kie" ? "تبويب توليد الفيديو" : "شريط مفتاح CometAPI";
+  const tool = provider === "kie" ? "save_kie_key" : "save_comet_key";
+  const arg = provider === "kie" ? "kie_key" : "api_key";
+  return (
+    `المفتاح المستخدم غير صالح أو نفد رصيده — أضف مفتاح ${label} جديدًا من الموقع (${where}) وسيُستخدم فورًا بدل القديم. ` +
+    `FIX FROM CHAT: ask the user for their NEW ${label} key and call the ${tool} MCP tool with it ` +
+    `(or pass it as the ${arg} argument of the generate call) — the key is validated with a free probe, ` +
+    "stored encrypted and becomes the account's key everywhere. If the user already added the key on the " +
+    "website but this MCP connection still fails, the URL token belongs to a DIFFERENT account — reconnect " +
+    "with a freshly copied MCP URL from the website so the tokens match."
+  );
+}

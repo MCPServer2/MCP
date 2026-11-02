@@ -1,11 +1,20 @@
 import { db } from "@/lib/db";
-import { CometError, resolveCometKeyForUser } from "@/lib/comet-server";
+import {
+  CometError,
+  adoptUserCometKey,
+  getUserCometKey,
+  resolveCometKeyForUser,
+  validateCometKey,
+} from "@/lib/comet-server";
 import { runGeneration, type RunParams } from "@/lib/generation-service";
 import {
   KieError,
   MAX_KEYFRAME_S,
+  adoptUserKieKey,
   getUserKieKey,
+  validateKieKey,
 } from "@/lib/kie-server";
+import { keyFixHint, maskKey } from "@/lib/key-vault";
 import {
   recoverVideoJob,
   runVideoGeneration,
@@ -163,11 +172,12 @@ const TOOLS: ToolDef[] = [
         api_key: {
           type: "string",
           description:
-            "Optional personal CometAPI key. When omitted, the key the account owner saved on the " +
-            "website (images tab) is used automatically. NEW-KEY RULE: if the saved key fails (invalid " +
+            "Optional personal CometAPI key. When omitted, the key saved on this account (images tab) " +
+            "is used automatically. NEW-KEY RULE: if the saved key fails (invalid " +
             "or out of quota) and a DIFFERENT key is supplied here, the supplied key is used and is " +
-            "saved automatically as the account's new key — the old one is replaced. So when the user " +
-            "gives you a new key, just pass it here once and it becomes their saved key everywhere.",
+            "saved automatically as the account's new key — the old one is replaced. Saving the key " +
+            "with the save_comet_key tool has the same effect; prefer it when the user just pastes a " +
+            "key without asking for an image.",
         },
         ...imageParams,
         background: {
@@ -209,10 +219,11 @@ const TOOLS: ToolDef[] = [
         api_key: {
           type: "string",
           description:
-            "Optional personal CometAPI key. When omitted, the key the account owner saved on the " +
-            "website (images tab) is used automatically. NEW-KEY RULE: if the saved key fails (invalid " +
+            "Optional personal CometAPI key. When omitted, the key saved on this account (images tab) " +
+            "is used automatically. NEW-KEY RULE: if the saved key fails (invalid " +
             "or out of quota) and a DIFFERENT key is supplied here, the supplied key is used and is " +
-            "saved automatically as the account's new key — the old one is replaced.",
+            "saved automatically as the account's new key — the old one is replaced. Saving the key " +
+            "with the save_comet_key tool has the same effect.",
         },
         ...imageParams,
       },
@@ -296,9 +307,11 @@ const TOOLS: ToolDef[] = [
       "Supports pure text-to-video, animating an input image (image_url), a Start Frame and/or End Frame " +
       "(start_frame_url / end_frame_url), a Loop frame (loop_url — used as both first and last frame, " +
       "cannot be combined with start/end frames) and up to 4 mid-video keyframes " +
-      "(keyframes: [{url, timestamp_s}]). Billing uses the kie.ai key saved on the website; if that key " +
+      "(keyframes: [{url, timestamp_s}]). Billing uses the kie.ai key saved on this account; if that key " +
       "fails (invalid or out of credits) and a different kie_key argument is supplied, the supplied key " +
-      "is used AND saved as the account's new key automatically (the old one is replaced). Videos typically " +
+      "is used AND saved as the account's new key automatically (the old one is replaced). When a key " +
+      "problem appears, call check_keys to see the account's keys and ask the user for their new key to " +
+      "save with save_kie_key. Videos typically " +
       "finish in 40-120 seconds; if the tool replies that the job is still running, poll it with " +
       "check_video_job. The finished video is saved to the user's private library. The result includes " +
       "an INLINE PREVIEW IMAGE (a frame of the video) as an image content block and a markdown image " +
@@ -375,10 +388,10 @@ const TOOLS: ToolDef[] = [
           type: "string",
           description:
             "Optional personal kie.ai API key. NEW-KEY RULE: the newest key the user provides ALWAYS " +
-            "wins. If the key saved on the website fails (invalid or out of credits) and a DIFFERENT " +
+            "wins. If the key saved on the account fails (invalid or out of credits) and a DIFFERENT " +
             "key is supplied here, the supplied key is used and is saved automatically as the " +
-            "account's new key — the old one is replaced. So when the user gives you a new kie.ai " +
-            "key, just pass it here once and it becomes their saved key everywhere.",
+            "account's new key — the old one is replaced. Saving the key with the save_kie_key tool " +
+            "has the same effect; prefer it when the user just pastes a key without asking for a video.",
         },
       },
       additionalProperties: false,
@@ -450,6 +463,75 @@ const TOOLS: ToolDef[] = [
           description: "How many videos to return (1-20). Default: 6.",
         },
       },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "save_kie_key",
+    title: "Save the account's kie.ai key",
+    description:
+      "Save (or replace) the kie.ai API key that pays for video generation on this account. Use it when " +
+      "video generation fails with an invalid-key or insufficient-credits error, or whenever the user " +
+      "pastes a new kie.ai key in the chat. The key is validated with a FREE probe (no credits spent), " +
+      "stored encrypted (AES-256-GCM) and bound to this account — it replaces any previously saved key " +
+      "and is used automatically by every future video generation on the website AND via this MCP server. " +
+      "The newest key the user provides always wins.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description:
+            "The user's full kie.ai API key, pasted in the chat. It is validated with a free probe before " +
+            "being stored; an invalid key is rejected with no change to the account.",
+        },
+      },
+      required: ["key"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "save_comet_key",
+    title: "Save the account's CometAPI key",
+    description:
+      "Save (or replace) the CometAPI key that pays for IMAGE generation on this account. Use it when " +
+      "image generation fails with an invalid-key or insufficient-quota error, or whenever the user " +
+      "pastes a new CometAPI key in the chat. The key is validated with a FREE probe (no credits spent), " +
+      "stored encrypted (AES-256-GCM) and bound to this account — it replaces any previously saved key " +
+      "and is used automatically by every future image generation on the website AND via this MCP server. " +
+      "The newest key the user provides always wins.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description:
+            "The user's full CometAPI key, pasted in the chat. It is validated with a free probe before " +
+            "being stored; an invalid key is rejected with no change to the account.",
+        },
+      },
+      required: ["key"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "check_keys",
+    title: "Show saved API keys status",
+    description:
+      "Show which API keys are saved on this account (masked — never the full key): the kie.ai key that " +
+      "pays for videos and the CometAPI key that pays for images, with their last known balance and " +
+      "whether the server's built-in fallback keys exist. Use it to diagnose billing problems BEFORE or " +
+      "AFTER a failed generation. IMPORTANT: keys are per-account — the account is the FLR- token inside " +
+      "this MCP server URL. A key the user added on the website is only visible here when the URL token " +
+      "matches that website account; if the user already added a key on the website but generations still " +
+      "fail, they should reconnect this MCP server with a freshly copied URL from the website (so the " +
+      "tokens match), or paste the key here and save it with save_kie_key / save_comet_key.",
+    inputSchema: {
+      type: "object",
+      properties: {},
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -1094,8 +1176,8 @@ async function execGenerateVideo(
     return textResult(error ?? "Invalid arguments.", true);
   }
 
-  // Key resolution (mirrors the pipeline): the key saved on the website for
-  // this account ALWAYS wins — adding a new key there deletes the old one and
+  // Key resolution (mirrors the pipeline): the key saved for this account ALWAYS
+  // wins — adding a new key (website or save_kie_key) deletes the old one and
   // the new one applies even if a stale kie_key argument is still being sent.
   // The kie_key argument is only a fallback when nothing is saved; the server's
   // built-in KIE_API_KEY comes last. Checked here to fail fast with an
@@ -1103,10 +1185,10 @@ async function execGenerateVideo(
   const savedKieKey = await getUserKieKey(token);
   if (!process.env.KIE_API_KEY?.trim() && !savedKieKey && !parsed.kieKey) {
     return textResult(
-      "Video generation is not configured for this account: no kie.ai key was saved on the website " +
-        "(video tab → save your kie.ai key) and the server has no built-in KIE_API_KEY. The account " +
-        "owner can save their key once on the website (the newest saved key always replaces the old " +
-        "one), or you can pass a kie_key argument as a fallback.",
+      "Video generation is not configured for this account: no kie.ai key is saved and the server has no " +
+        "built-in KIE_API_KEY. Ask the user for their kie.ai key and install it with the save_kie_key tool " +
+        "(or pass it as the kie_key argument) — it is then stored encrypted and used automatically for all " +
+        "future video generations.",
       true
     );
   }
@@ -1338,6 +1420,153 @@ const serializeVideoRowSelect = {
 } as const;
 
 /* ------------------------------------------------------------------ */
+/* Key management tools (BYOK self-healing from the chat)              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Saves the user's kie.ai key (pasted in chat) as the account's video key.
+ * Free validation first — an invalid key is rejected WITHOUT touching the
+ * vault; a valid one (or one saved while kie.ai was unreachable) replaces any
+ * previous key and bills every future video generation on this account.
+ */
+async function execSaveKieKey(args: Record<string, unknown>, creds: McpCreds): Promise<ToolResult> {
+  const token = creds.token as string;
+  const key = typeof args.key === "string" ? args.key.trim() : "";
+  if (!key) {
+    return textResult(
+      "The 'key' parameter is required — paste the user's FULL kie.ai API key " +
+        "(from console.kie.ai → API keys).",
+      true
+    );
+  }
+  if (key.length > 256) return textResult("The provided key is too long (max 256 characters).", true);
+
+  const probe = await validateKieKey(key);
+  if (!probe.valid && !probe.unreachable) {
+    return textResult(
+      "❌ kie.ai rejected this key (invalid or expired) — nothing was changed on the account. " +
+        "Ask the user to copy the COMPLETE key again from console.kie.ai (API keys) and send it, " +
+        "then call save_kie_key once more.",
+      true
+    );
+  }
+
+  const stored = await adoptUserKieKey(token, key);
+  if (!stored) {
+    return textResult("Could not store the key (database error). Please try again.", true);
+  }
+
+  const balance =
+    probe.unreachable || probe.credits === null
+      ? "The balance check was unreachable, but the key was stored and will be used."
+      : `Current balance: ${probe.credits} credit${probe.credits === 1 ? "" : "s"}.`;
+  const warning =
+    !probe.unreachable && probe.credits !== null && probe.credits <= 0
+      ? " ⚠️ The balance is 0 — video generation will still fail until the user tops up or provides a different key."
+      : "";
+  return textResult(
+    `✅ kie.ai key ${maskKey(key)} saved for this account (stored encrypted; it replaced any previous key). ` +
+      `${balance}${warning} Every future video generation on this account — website AND this MCP server — ` +
+      "now bills this key. The user can simply ask you to generate a video."
+  );
+}
+
+/** Saves the user's CometAPI key (pasted in chat) as the account's image key. */
+async function execSaveCometKey(args: Record<string, unknown>, creds: McpCreds): Promise<ToolResult> {
+  const token = creds.token as string;
+  const key = typeof args.key === "string" ? args.key.trim() : "";
+  if (!key) {
+    return textResult(
+      "The 'key' parameter is required — paste the user's FULL CometAPI key.",
+      true
+    );
+  }
+  if (key.length > 256) return textResult("The provided key is too long (max 256 characters).", true);
+
+  const probe = await validateCometKey(key);
+  if (!probe.valid && !probe.unreachable) {
+    return textResult(
+      "❌ CometAPI rejected this key (invalid or expired) — nothing was changed on the account. " +
+        "Ask the user to copy the COMPLETE key again and send it, then call save_comet_key once more.",
+      true
+    );
+  }
+
+  const stored = await adoptUserCometKey(token, key);
+  if (!stored) {
+    return textResult("Could not store the key (database error). Please try again.", true);
+  }
+
+  const usage = probe.usage;
+  const balance = !usage
+    ? "The quota check was unreachable, but the key was stored and will be used."
+    : usage.unlimitedQuota
+      ? "Quota: unlimited."
+      : `Available quota: ${usage.totalAvailable} unit${usage.totalAvailable === 1 ? "" : "s"}.`;
+  const warning =
+    usage && !usage.unlimitedQuota && usage.totalAvailable <= 0
+      ? " ⚠️ The available quota is 0 — image generation will still fail until the user tops up or provides a different key."
+      : "";
+  return textResult(
+    `✅ CometAPI key ${maskKey(key)} saved for this account (stored encrypted; it replaced any previous key). ` +
+      `${balance}${warning} Every future image generation on this account — website AND this MCP server — ` +
+      "now bills this key. The user can simply ask you to generate images."
+  );
+}
+
+/**
+ * Reports the account's saved keys (masked) + balances without exposing key
+ * material, plus whether the server's built-in fallback keys exist. The main
+ * diagnosis tool for "insufficient balance / invalid key" complaints — it also
+ * explains the per-token account model so a website-saved key under a
+ * DIFFERENT token is recognized as the root cause instead of a mystery.
+ */
+async function execCheckKeys(creds: McpCreds): Promise<ToolResult> {
+  const token = creds.token as string;
+  const [kiePlain, cometPlain, row] = await Promise.all([
+    getUserKieKey(token),
+    getUserCometKey(token),
+    db.userKey
+      .findUnique({
+        where: { userToken: token },
+        select: { kieCredits: true, kieCheckedAt: true, cometName: true, cometAvailable: true, cometUnlimited: true },
+      })
+      .catch(() => null),
+  ]);
+
+  const kie = kiePlain
+    ? `SAVED key ${maskKey(kiePlain)}` +
+      (row?.kieCredits !== null && row?.kieCredits !== undefined
+        ? `, last known balance ${row.kieCredits} credits` +
+          (row?.kieCheckedAt ? ` (checked ${new Date(row.kieCheckedAt).toISOString()})` : "")
+        : "")
+    : process.env.KIE_API_KEY?.trim()
+      ? "no personal key saved — video generation bills the server's built-in key"
+      : "no personal key saved and the server has NO built-in kie.ai key — video generation cannot run until a key is saved";
+
+  const comet = cometPlain
+    ? `SAVED key ${maskKey(cometPlain)}` +
+      (row?.cometUnlimited
+        ? " (unlimited quota)"
+        : row?.cometAvailable !== null && row?.cometAvailable !== undefined
+          ? `, last known quota ${row.cometAvailable} units`
+          : "") +
+      (row?.cometName ? `, name "${row.cometName}"` : "")
+    : "no personal key saved — image generation needs a key: ask the user for their CometAPI key and call save_comet_key";
+
+  return textResult(
+    `🔑 API keys for this MCP account (token ${token.slice(0, 8)}…):\n` +
+      `- kie.ai (videos): ${kie}\n` +
+      `- CometAPI (images): ${comet}\n\n` +
+      "Keys are per-account: the account is the FLR- token inside this MCP server URL. If the user added " +
+      "a key on the website but generations still fail here, this URL's token belongs to a different " +
+      "account — either reconnect with a freshly copied MCP URL from the website (tokens then match and " +
+      "the website key is used automatically), or ask the user to paste the key in this chat and save it " +
+      "with save_kie_key (videos) / save_comet_key (images). Saving a new key always replaces the old one."
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatch                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -1379,12 +1608,16 @@ async function dispatchRequest(
           "poll a running generation, get_image / list_recent_images for the gallery. Videos: the Grok Imagine " +
           "model (grok-imagine-video-1-5-preview) — use generate_video for text-to-video, image animation, " +
           "Start/End frames, Loop frames and keyframes; poll with check_video_job, and use get_video / " +
-          "list_recent_videos for the video library. Billing uses the keys the account owner saved on the " +
-          "website automatically (CometAPI for images, kie.ai for videos) — never ask the user for a key, " +
-          "just call the tools. KEY RULE: if a generation fails because the saved key is out of credits " +
-          "or invalid, ask the user for their NEW key and retry once by passing it (api_key for images, " +
-          "kie_key for videos) — the new key is then saved automatically and replaces the old one " +
-          "everywhere, so it applies to all future generations too. " +
+          "list_recent_videos for the video library. Billing uses the API keys saved on the account " +
+          "(CometAPI for images, kie.ai for videos) — normally never ask for a key, just call the tools. " +
+          "KEY RULE: keys belong to the ACCOUNT, which is the FLR- token inside this MCP server URL. If a " +
+          "generation fails because the key is out of credits or invalid: (1) call check_keys to see which " +
+          "key this account uses; (2) ask the user for their NEW key and install it by calling save_kie_key " +
+          "(videos) or save_comet_key (images) — or pass it directly as the kie_key / api_key argument of " +
+          "the generate call. The new key is validated free, stored encrypted and replaces the old one " +
+          "everywhere. If the user ALREADY added the key on the website but this connection still fails, " +
+          "this URL's token belongs to a different account — tell the user to reconnect using a freshly " +
+          "copied MCP URL from the website. " +
           "DISPLAY RULE (images and videos alike): whenever you generate, fetch or re-share media, START your " +
           "reply with the ready-made markdown line(s) the tool returns — ![image](url) renders the actual " +
           "picture INSIDE the chat, and the video's ![preview](url) line plus the ▶ Watch the video (MP4) " +
@@ -1431,6 +1664,9 @@ async function dispatchRequest(
         else if (name === "check_video_job") result = await execCheckVideoJob(args, creds, baseUrl);
         else if (name === "get_video") result = await execGetVideo(args, creds, baseUrl);
         else if (name === "list_recent_videos") result = await execListRecentVideos(args, creds, baseUrl);
+        else if (name === "save_kie_key") result = await execSaveKieKey(args, creds);
+        else if (name === "save_comet_key") result = await execSaveCometKey(args, creds);
+        else if (name === "check_keys") result = await execCheckKeys(creds);
         else result = await execListRecent(args, creds, baseUrl);
         return resultResponse(id, { ...result });
       } catch (error) {

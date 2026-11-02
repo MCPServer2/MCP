@@ -10,6 +10,7 @@ import {
   mimeForFormat,
 } from "@/lib/comet-server";
 import { s3MediaKey, uploadS3Media } from "@/lib/s3-storage";
+import { keyFixHint } from "@/lib/key-vault";
 
 /**
  * Shared generation pipeline used by both the website (POST /api/generate,
@@ -133,16 +134,26 @@ export async function runGeneration(p: RunParams): Promise<void> {
       Boolean(p.explicitApiKey) &&
       p.explicitApiKey !== p.apiKey &&
       [401, 402, 403].includes(first.status);
-    if (!retryable) throw first;
+    if (!retryable) {
+      // Key problem with no replacement available → actionable fix-it tail so
+      // the website user AND the chat assistant know exactly how to recover.
+      if ([401, 402, 403].includes(first.status)) {
+        throw new CometError(`${first.message} ${keyFixHint("comet")}`, first.status);
+      }
+      throw first;
+    }
     let retry: Response;
     try {
       retry = await doFetch(p.explicitApiKey as string);
     } catch {
-      throw first;
+      throw new CometError(`${first.message} ${keyFixHint("comet")}`, first.status);
     }
     if (!retry.ok) {
       const second = mapUpstreamError(retry.status, await retry.text());
-      throw new CometError(`${first.message} — والمفتاح البديل فشل أيضًا: ${second.message}`, first.status);
+      throw new CometError(
+        `${first.message} — والمفتاح البديل فشل أيضًا: ${second.message}. ${keyFixHint("comet")}`,
+        first.status
+      );
     }
     response = retry;
     // Adopt: the provided key replaces the dead saved one everywhere (site +

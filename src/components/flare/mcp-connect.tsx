@@ -167,6 +167,9 @@ export function McpConnect() {
               <li><code className="rounded bg-muted px-1 py-0.5 font-mono">check_video_job</code> — {t.mcp.toolVideoCheck}</li>
               <li><code className="rounded bg-muted px-1 py-0.5 font-mono">get_video</code> — {t.mcp.toolVideoGet}</li>
               <li><code className="rounded bg-muted px-1 py-0.5 font-mono">list_recent_videos</code> — {t.mcp.toolVideoList}</li>
+              <li><code className="rounded bg-muted px-1 py-0.5 font-mono">save_kie_key</code> — {t.mcp.toolSaveKie}</li>
+              <li><code className="rounded bg-muted px-1 py-0.5 font-mono">save_comet_key</code> — {t.mcp.toolSaveComet}</li>
+              <li><code className="rounded bg-muted px-1 py-0.5 font-mono">check_keys</code> — {t.mcp.toolCheckKeys}</li>
             </ul>
           </div>
 

@@ -10,7 +10,7 @@ import {
   isKieKeyProblem,
   type VideoKeyframe,
 } from "@/lib/kie-server";
-import { maskKey } from "@/lib/key-vault";
+import { keyFixHint, maskKey } from "@/lib/key-vault";
 import { spawn } from "child_process";
 import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
@@ -45,16 +45,14 @@ const MAX_VIDEO_BYTES = 80 * 1024 * 1024; // 80 MB binary per video
 
 /**
  * Appends WHICH key was used (masked) to key-problem errors and how to fix
- * them — the user must be able to tell whether the old or the new key ran.
+ * them — the user must be able to tell whether the old or the new key ran,
+ * and the chat assistant driving MCP gets concrete self-healing instructions
+ * (save_kie_key / kie_key argument / fresh MCP URL when tokens differ).
  */
 function enrichKeyProblem(error: unknown, usedKey?: string | null): unknown {
   if (!(error instanceof KieError) || !isKieKeyProblem(error)) return error;
-  const hint =
-    error.code === 402
-      ? "أضف مفتاح kie.ai جديدًا (من تبويب توليد الفيديو أو أرسله للمساعد) وسيُستخدم ويُحفظ تلقائيًا بدل القديم."
-      : "أضف مفتاح kie.ai صحيحًا (من تبويب توليد الفيديو أو أرسله للمساعد) وسيُستخدم ويُحفظ تلقائيًا بدل القديم.";
   const which = usedKey ? ` (المفتاح المستخدم: ${maskKey(usedKey)})` : "";
-  return new KieError(`${error.message}${which} ${hint}`, error.status, error.code);
+  return new KieError(`${error.message}${which} ${keyFixHint("kie")}`, error.status, error.code);
 }
 
 export interface VideoRunParams {
@@ -356,7 +354,7 @@ export async function runVideoGeneration(p: VideoRunParams): Promise<void> {
         throw new KieError(
           `تعذّر التوليد بالمفتاحين: المحفوظ (${maskKey(kieKey ?? "")}) والمُرسل (${maskKey(p.kieKey ?? "")}) — ${
             second instanceof KieError ? second.message : "خطأ غير متوقع"
-          }. أضف مفتاح kie.ai جديدًا من تبويب توليد الفيديو وسيُستخدم ويُحفظ تلقائيًا.`,
+          }. ${keyFixHint("kie")}`,
           second instanceof KieError ? second.status : 502
         );
       }

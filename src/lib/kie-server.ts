@@ -76,7 +76,17 @@ export async function getUserKieKey(userToken: string): Promise<string | null> {
     });
     if (!row?.kieApiKey) return null;
     const plain = decryptSecret(row.kieApiKey);
-    if (plain && needsReencryption(row.kieApiKey)) {
+    if (!plain) {
+      // The row exists but no keyring secret can open it — silently returning
+      // null would make a saved key invisible and push generations onto the
+      // (possibly dead) server key. Surface it in the server log.
+      console.warn(
+        `[key-vault] kie.ai key for token ${userToken.slice(0, 8)}… exists but cannot be decrypted ` +
+          "(vault secret mismatch?) — treating as not saved."
+      );
+      return null;
+    }
+    if (needsReencryption(row.kieApiKey)) {
       try {
         await db.userKey.update({
           where: { userToken },

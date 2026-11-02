@@ -133,7 +133,15 @@ export async function getUserCometKey(userToken: string): Promise<string | null>
     });
     if (!row?.cometApiKey) return null;
     const plain = decryptSecret(row.cometApiKey);
-    if (plain && needsReencryption(row.cometApiKey)) {
+    if (!plain) {
+      // Undecryptable row → the saved key becomes invisible; log it loudly.
+      console.warn(
+        `[key-vault] CometAPI key for token ${userToken.slice(0, 8)}… exists but cannot be decrypted ` +
+          "(vault secret mismatch?) — treating as not saved."
+      );
+      return null;
+    }
+    if (needsReencryption(row.cometApiKey)) {
       // Best-effort lazy migration to the canonical vault secret.
       try {
         await db.userKey.update({

@@ -400,6 +400,9 @@ const ar = {
     toolVideoCheck: "متابعة مهمة فيديو قيد التوليد",
     toolVideoGet: "جلب فيديو محفوظ بمعرّفه أو بكلمة latest مع معاينة تُعرض داخل الشات ورابط التشغيل",
     toolVideoList: "عرض أحدث فيديوهات مكتبتك مع معاينات جاهزة للعرض داخل الشات",
+    toolSaveKie: "حفظ مفتاح kie.ai الجديد في حسابك من داخل المحادثة (تحقق مجاني، تشفير، ويحل محل القديم فورًا)",
+    toolSaveComet: "حفظ مفتاح CometAPI الجديد في حسابك من داخل المحادثة (تحقق مجاني، تشفير، ويحل محل القديم فورًا)",
+    toolCheckKeys: "عرض حالة المفاتيح المحفوظة في حسابك (مقنّعة) مع الأرصدة الأخيرة لتشخيص مشاكل الفوترة",
     privacy: "الرابط يحتوي مفتاحك ومعرّفك الخاص — لا تشاركه مع أي شخص.",
   },
 };
@@ -804,6 +807,9 @@ const en: Dict = {
     toolVideoCheck: "Follow a running video generation",
     toolVideoGet: "Fetch a stored video by id (or the keyword latest) with an inline preview frame and its playable URL",
     toolVideoList: "List your latest videos with inline preview markdown",
+    toolSaveKie: "Save a NEW kie.ai key to this account straight from the chat (free validation, encrypted, replaces the old key instantly)",
+    toolSaveComet: "Save a NEW CometAPI key to this account straight from the chat (free validation, encrypted, replaces the old key instantly)",
+    toolCheckKeys: "Show this account's saved keys (masked) with last known balances to diagnose billing problems",
     privacy: "The URL contains your key and personal ID — do not share it with anyone.",
   },
 };
